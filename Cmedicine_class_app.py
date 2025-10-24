@@ -14,7 +14,7 @@ st.set_page_config(
     layout="centered"
 )
 
-# ===================== 你原本的題庫（文字題用） =====================
+# ===================== 題庫（文字模式用） =====================
 DATA = [
     {"item": "人參", "category": "補氣藥"}, {"item": "黨參", "category": "補氣藥"},
     {"item": "黃耆", "category": "補氣藥"}, {"item": "山藥", "category": "補氣藥"},
@@ -44,7 +44,7 @@ DATA = [
     {"item": "芡實", "category": "收澀藥"}, {"item": "五味子", "category": "收澀藥"},
     {"item": "山茱萸", "category": "收澀藥"},
 
-    {"item": "麻黃", "category": "辛溫解表藜藥"}, {"item": "辛夷", "category": "辛溫解表藥"},
+    {"item": "麻黃", "category": "辛溫解表藥"}, {"item": "辛夷", "category": "辛溫解表藥"},
     {"item": "白芷", "category": "辛溫解表藥"}, {"item": "蒼耳子", "category": "辛溫解表藥"},
     {"item": "防風", "category": "辛溫解表藥"}, {"item": "荊芥", "category": "辛溫解表藥"},
     {"item": "紫蘇葉", "category": "辛溫解表藥"},
@@ -104,14 +104,14 @@ CATE2ITEMS = {}
 for d in DATA:
     CATE2ITEMS.setdefault(d["category"], []).append(d["item"])
 
-# ===================== 常數（題數 / 模式名稱） =====================
+# ===================== 常數 =====================
 MAX_QUESTIONS = 10
 
 MODE_1 = "模式1【單選：藥材→分類】"
 MODE_2 = "模式2【多選：分類→藥材】"
 MODE_3 = "模式3【圖片辨識：看圖選藥材】"
 
-# ===================== 样式 =====================
+# ===================== 樣式 =====================
 st.markdown("""
 <style>
 html, body, [class*="css"]  { font-size: 22px !important; }
@@ -126,43 +126,40 @@ div[data-testid="stVerticalBlock"] > div:has(> div[data-testid="stRadio"]) { mar
 </style>
 """, unsafe_allow_html=True)
 
-# ===================== 圖片模式的資料載入 =====================
+# ===================== 圖片模式：載入 Excel/CSV + ZIP =====================
 @st.cache_data(show_spinner=False)
 def load_herb_dataset(table_bytes: bytes, table_type: str, zip_bytes: bytes):
     """
-    讀 Excel/CSV (必須要有 name / filename / category 欄位)
-    解壓 ZIP 圖檔
-    回傳 (herb_data_list, base_dir)
-    herb_data_list = [
-        {"name": "...", "img_path": "/tmp/.../1.jpg", "category": "..."},
-        ...
-    ]
+    table_bytes: Excel/CSV 內容
+    table_type: "excel" or "csv"
+    zip_bytes: ZIP檔內容
+    回傳 (herb_list, tmp_dir)
+    herb_list = [{"name":..., "img_path":..., "category":...}, ...]
     """
-    # 1. 讀表格
+    # 1. 讀檔案成 DataFrame
     if table_type == "excel":
         xls = pd.ExcelFile(io.BytesIO(table_bytes))
-        # 用第一個工作表
         df = pd.read_excel(xls, xls.sheet_names[0])
     else:
         df = pd.read_csv(io.BytesIO(table_bytes))
 
-    # 強制使用固定欄位
+    # 2. 檢查欄位
     required_cols = ["name", "filename", "category"]
     for col in required_cols:
         if col not in df.columns:
             raise ValueError(f"缺少欄位 {col}，請確認欄位名稱。")
 
-    # 2. 解壓 ZIP
+    # 3. 解壓 ZIP 到暫存資料夾
     tmp_dir = tempfile.mkdtemp(prefix="herb_imgs_")
     with zipfile.ZipFile(io.BytesIO(zip_bytes), 'r') as zf:
         zf.extractall(tmp_dir)
 
-    # 3. 建立清單
+    # 4. 建立 herb_list
     herb_list = []
     for _, row in df.iterrows():
         name = str(row["name"]).strip()
         filename = str(row["filename"]).strip()
-        category = str(row["category"]).strip() if not pd.isna(row["category"]) else ""
+        category = "" if pd.isna(row["category"]) else str(row["category"]).strip()
 
         local_path = os.path.join(tmp_dir, filename)
         if os.path.exists(local_path):
@@ -171,11 +168,11 @@ def load_herb_dataset(table_bytes: bytes, table_type: str, zip_bytes: bytes):
                 "img_path": local_path,
                 "category": category
             })
-        # 如果圖不在 ZIP，就先略過，不會把它放進題庫
+        # 如果對不上圖，就略過那一列
 
     return herb_list, tmp_dir
 
-# ===================== 狀態初始化 =====================
+# ===================== Session State 初始化 =====================
 def _stem_key(mode, stem):
     return f"{mode}::{stem}"
 
@@ -186,7 +183,8 @@ def init_state():
     st.session_state.records = []  # (mode, stem, options, correct_set, chosen_set, is_correct)
     st.session_state.used_stems = set()
     st.session_state.round_bank = []
-    # 圖片辨識模式的來源資料
+
+    # 圖片模式的資料
     st.session_state.herb_data = []
     st.session_state.herb_tmpdir = None
 
@@ -197,6 +195,12 @@ def start_new_round():
     st.session_state.used_stems.clear()
     st.session_state.round_bank = []
 
+    # ---- 防呆重點：如果在模式3但還沒載入圖片，強制切回模式1 ----
+    if st.session_state.mode == MODE_3 and not st.session_state.herb_data:
+        st.warning("目前尚未載入圖片資料，暫時切回模式1。")
+        st.session_state.mode = MODE_1
+
+    # 預先生出本回合題目清單
     for _ in range(MAX_QUESTIONS):
         q = generate_question(st.session_state.mode)
         tries = 0
@@ -206,12 +210,12 @@ def start_new_round():
         st.session_state.used_stems.add(_stem_key(q["mode"], q["stem"]))
         st.session_state.round_bank.append(q)
 
-# 第一次啟動
+# 第一次啟動時先建狀態
 if "q_index" not in st.session_state:
     init_state()
     start_new_round()
 
-# ===================== 安全抽樣工具 =====================
+# ===================== 小工具：安全抽樣 =====================
 def safe_sample(population, k):
     population = list(population)
     if k <= 0:
@@ -223,7 +227,7 @@ def safe_sample(population, k):
 
 # ===================== 題目生成 =====================
 def generate_question(mode):
-    # 模式1：單選（題幹=藥材名稱，選分類）
+    # 模式1：單選 題幹=藥材名稱，選分類
     if mode == MODE_1:
         stem = random.choice(ITEMS)
         correct_cate = ITEM2CATE[stem]
@@ -239,11 +243,10 @@ def generate_question(mode):
             "correct_set": correct_set
         }
 
-    # 模式3：圖片辨識（題幹=圖片，選正確藥材名稱）
+    # 模式3：圖片辨識 題幹=圖片，選正確藥材名稱
     if mode == MODE_3:
-        # herb_data 來自使用者上傳的 Excel + ZIP
         pool = st.session_state.herb_data
-        # 如果沒有圖資料，先塞一題假的避免崩潰
+        # 理論上在 start_new_round() 已經防呆，不會空
         if not pool:
             return {
                 "mode": MODE_3,
@@ -253,29 +256,33 @@ def generate_question(mode):
             }
 
         correct = random.choice(pool)
-        stem_img = correct["img_path"]  # 本地暫存路徑
-        # 組四個候選藥名
+        stem_img_path = correct["img_path"]
+
         other_names = [h["name"] for h in pool if h["name"] != correct["name"]]
         distractors = safe_sample(other_names, 3)
         options = [correct["name"]] + distractors
         options = options[:4]
         random.shuffle(options)
+
         return {
             "mode": MODE_3,
-            "stem": stem_img,
+            "stem": stem_img_path,
             "options": options,
             "correct_set": {correct["name"]}
         }
 
-    # 模式2：多選（題幹=分類，選該分類的所有藥材）
+    # 模式2：多選 題幹=分類，選該分類的所有藥材
     stem = random.choice(CATES)
     pool_correct = CATE2ITEMS[stem][:]
     n_correct = max(1, min(3, len(pool_correct)))
     correct_items = set(safe_sample(pool_correct, n_correct))
+
     pool_wrong = [it for it in ITEMS if ITEM2CATE[it] != stem]
     wrong_items = set(safe_sample(pool_wrong, 4 - len(correct_items)))
+
     options = list(correct_items | wrong_items)[:4]
     random.shuffle(options)
+
     return {
         "mode": MODE_2,
         "stem": stem,
@@ -283,7 +290,7 @@ def generate_question(mode):
         "correct_set": set(correct_items)
     }
 
-# ===================== 畫面元件：進度條 =====================
+# ===================== UI: 進度條卡片 =====================
 def render_progress_card():
     i = st.session_state.q_index + 1
     n = MAX_QUESTIONS
@@ -301,24 +308,27 @@ def render_progress_card():
         unsafe_allow_html=True
     )
 
-# ===================== 題目顯示（依模式） =====================
+# ===================== UI: 題目顯示 =====================
 def render_question(qobj):
     mode = qobj["mode"]
     stem = qobj["stem"]
     options = qobj["options"]
 
-    # 模式1：單選 題幹=藥材名稱
+    # 模式1：單選 - 題幹=藥材名稱，選分類
     if mode == MODE_1:
         st.markdown(
             f"<h2>Q{st.session_state.q_index + 1}. {stem}</h2>",
             unsafe_allow_html=True
         )
-        choice = st.radio("", options,
-                          key=f"mc_{st.session_state.q_index}",
-                          label_visibility="collapsed")
+        choice = st.radio(
+            "",
+            options,
+            key=f"mc_{st.session_state.q_index}",
+            label_visibility="collapsed"
+        )
         return [choice] if choice else []
 
-    # 模式3：看圖選名字（單選）
+    # 模式3：單選 - 題幹=圖片，選藥材名稱
     if mode == MODE_3:
         st.markdown(
             f"<h2>Q{st.session_state.q_index + 1}. 請選出正確的藥材名稱</h2>",
@@ -328,13 +338,15 @@ def render_question(qobj):
             st.image(stem, use_column_width=True)
         else:
             st.warning("尚未載入圖片資料，請先在左邊上傳 Excel + ZIP")
-        choice = st.radio("",
-                          options,
-                          key=f"img_{st.session_state.q_index}",
-                          label_visibility="collapsed")
+        choice = st.radio(
+            "",
+            options,
+            key=f"img_{st.session_state.q_index}",
+            label_visibility="collapsed"
+        )
         return [choice] if choice else []
 
-    # 模式2：多選 題幹=分類
+    # 模式2：多選 - 題幹=分類，選該分類的藥材
     st.markdown(
         f"<h2>Q{st.session_state.q_index + 1}. {stem}</h2>",
         unsafe_allow_html=True
@@ -345,11 +357,11 @@ def render_question(qobj):
             chosen.append(it)
     return chosen
 
-# ===================== 判分與流程控制 =====================
+# ===================== 判分/流程控制 =====================
 def handle_action(qobj, chosen_list):
     correct_set = set(qobj["correct_set"])
     chosen_set = set(chosen_list)
-    # 單選題 / 多選題都採 "完全一致才算對"
+    # 採「完全一致才算對」
     is_correct = (chosen_set == correct_set)
 
     st.session_state.records.append(
@@ -382,7 +394,7 @@ with st.sidebar:
     )
 
     if table_file and zip_file:
-        # 偵測是 excel 還是 csv
+        # 判斷上傳的是 Excel 還是 CSV
         if table_file.name.lower().endswith((".xlsx", ".xls")):
             table_type = "excel"
         else:
@@ -403,18 +415,20 @@ with st.sidebar:
         except Exception as e:
             st.error(f"載入圖片模式資料時發生問題：{e}")
 
-    # 模式選擇（會依照是否有 herb_data 來限制模式3）
+    # 可用模式：只有在有圖資料後才開放模式3
     allowed_modes = [MODE_1, MODE_2]
     if st.session_state.herb_data:
         allowed_modes.append(MODE_3)
 
+    # 顯示模式選擇
     new_mode = st.radio(
         "選擇模式",
         allowed_modes,
-        index=allowed_modes.index(st.session_state.mode) if st.session_state.mode in allowed_modes else 0
+        index=allowed_modes.index(st.session_state.mode)
+        if st.session_state.mode in allowed_modes else 0
     )
 
-    # 如果玩家切換模式，重新出題
+    # 如果切換模式就重新出題
     if new_mode != st.session_state.mode:
         st.session_state.mode = new_mode
         start_new_round()
@@ -425,7 +439,7 @@ with st.sidebar:
         start_new_round()
         st.rerun()
 
-# ===================== 主畫面邏輯 =====================
+# ===================== 主畫面 =====================
 if st.session_state.q_index < MAX_QUESTIONS:
     render_progress_card()
     qobj = st.session_state.round_bank[st.session_state.q_index]
@@ -435,7 +449,7 @@ if st.session_state.q_index < MAX_QUESTIONS:
         ok = st.session_state.records[-1][-1]
         color = "#1a7f37" if ok else "#c62828"
 
-        # 顯示正解（簡化：只顯示正解，不顯示多餘說明）
+        # 顯示正解（簡化：只顯示正解字串）
         if qobj["mode"] in (MODE_1, MODE_3):
             true_ans = list(qobj["correct_set"])[0]
             st.markdown(
@@ -443,7 +457,6 @@ if st.session_state.q_index < MAX_QUESTIONS:
                 unsafe_allow_html=True
             )
         else:
-            # 模式2：一題可能多個正確藥材
             corr_items = "、".join(sorted(list(qobj["correct_set"])))
             st.markdown(
                 f"<div style='font-size:22px; font-weight:700; color:{color};'>{corr_items}</div>",
@@ -464,7 +477,7 @@ if st.session_state.q_index < MAX_QUESTIONS:
                 st.rerun()
 
 else:
-    # 回顧頁
+    # 回顧成績頁
     total = len(st.session_state.records)
     correct = sum(1 for r in st.session_state.records if r[-1])
     acc = (correct / total * 100) if total else 0.0
@@ -491,7 +504,8 @@ else:
                 st.markdown(f"- 你的作答：{'、'.join(sorted(list(chosen_set))) if chosen_set else '(未作答)'}")
 
             elif mode == MODE_3:
-                st.markdown(f"- 題幹（圖片檔）：{os.path.basename(stem) if stem else '(無)'}")
+                file_label = os.path.basename(stem) if stem else "(無)"
+                st.markdown(f"- 題幹（圖片檔）：{file_label}")
                 st.markdown(f"- 選項（藥材名）：{'、'.join(options)}")
                 st.markdown(f"- 正解（藥材名）：{list(correct_set)[0]}")
                 st.markdown(f"- 你的作答：{list(chosen_set)[0] if chosen_set else '(未作答)'}")
