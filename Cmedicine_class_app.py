@@ -447,6 +447,19 @@ elif mode_is_3:
     score = 0
     done = 0
 
+    # 強制 st.columns(2) 永遠左右並排（手機也不換行）
+    st.markdown("""
+    <style>
+    div[data-testid="column"] {
+        flex: 0 0 50% !important;
+        max-width: 50% !important;
+    }
+    div[data-testid="stHorizontalBlock"] {
+        flex-wrap: nowrap !important;
+    }
+    </style>
+    """, unsafe_allow_html=True)
+
     for i, q in enumerate(questions):
         st.markdown(f"**Q{i+1}. {q['name']}**")
 
@@ -454,75 +467,56 @@ elif mode_is_3:
         ans_key = f"ans_{i}"
         chosen = st.session_state.get(ans_key, None)
 
-        # 決定每一張圖的框線 class
-        def frame_class(opt_file):
-            if not chosen:
-                return "choice-frame"
-            if chosen == q["filename"] and opt_file == chosen:
-                return "choice-frame correct"
-            if chosen == opt_file and chosen != q["filename"]:
-                return "choice-frame wrong"
-            if chosen != opt_file and opt_file == q["filename"]:
-                return "choice-frame correct"
-            return "choice-frame"
-
-        # 產生兩張圖片的 HTML，使用 query 參數觸發互動
-        cell_html_list = []
-        for opt_file in opts_files:
+        cols = st.columns(2)
+        for col_idx, opt_file in enumerate(opts_files):
             img_path = os.path.join(IMAGE_DIR, opt_file)
+            border_color = None
+            if chosen:
+                if chosen == q["filename"] and opt_file == chosen:
+                    border_color = "#2f9e44"  # 綠框
+                elif chosen == opt_file and chosen != q["filename"]:
+                    border_color = "#d00000"  # 紅框
+                elif chosen != opt_file and opt_file == q["filename"]:
+                    border_color = "#2f9e44"  # 正解亮綠框
 
-            # 準備 base64 圖
-            img_b64 = ""
             if os.path.isfile(img_path) and Image is not None:
-                try:
-                    _img = Image.open(img_path)
-                    _img = crop_square_bottom(_img, PAIR_SIZE)
-                    import io, base64
-                    buf = io.BytesIO()
-                    _img.save(buf, format="PNG")
-                    img_b64 = base64.b64encode(buf.getvalue()).decode("utf-8")
-                except Exception:
-                    img_b64 = ""
+                img = Image.open(img_path)
+                img = crop_square_bottom(img, PAIR_SIZE)
+                import io, base64
+                buf = io.BytesIO()
+                img.save(buf, format="PNG")
+                b64 = base64.b64encode(buf.getvalue()).decode("utf-8")
+                border_css = (
+                    f"border:4px solid {border_color};" if border_color else
+                    "border:4px solid transparent;"
+                )
 
-            # 如果 PIL 失敗，用檔案路徑
-            if img_b64:
-                img_tag = f'<img class="choice-img" src="data:image/png;base64,{img_b64}">'
-            else:
-                img_tag = f'<img class="choice-img" src="file://{img_path}">'
+                with cols[col_idx]:
+                    # 按鈕形式：圖片當作按鈕
+                    if st.button(
+                        "",
+                        key=f"btn_{i}_{col_idx}",
+                        use_container_width=True,
+                    ):
+                        st.session_state[ans_key] = opt_file
+                        st.rerun()
 
-            cell_html_list.append(
-                f"""
-                <div class="choice-cell">
-                    <a class="choice-btn" href="?q={i}&pick={opt_file}">
-                        <div class="{frame_class(opt_file)}">
-                            {img_tag}
+                    st.markdown(
+                        f"""
+                        <div style="{border_css} border-radius:8px; overflow:hidden;">
+                            <img src="data:image/png;base64,{b64}" width="100%">
                         </div>
-                    </a>
-                </div>
-                """
-            )
+                        """,
+                        unsafe_allow_html=True,
+                    )
 
-        row_html = (
-            '<div class="choice-row">' +
-            "".join(cell_html_list) +
-            '</div>'
-        )
-
-        st.markdown(row_html, unsafe_allow_html=True)
-
-        # 解析（只對剛選的那一張圖顯示）
         if chosen:
             if chosen == q["filename"]:
-                st.markdown(
-                    "<div style='color:#2f9e44;font-weight:600;'>✔ 正確！</div>",
-                    unsafe_allow_html=True
-                )
+                st.markdown("<div style='color:#2f9e44;font-weight:600;'>✔ 正確！</div>", unsafe_allow_html=True)
             else:
                 picked_name = filename_to_name.get(chosen, "（未知）")
                 st.markdown(
-                    f"<div style='color:#d00000;font-weight:600;'>"
-                    f"✘ 答錯<br>此為：{picked_name}"
-                    f"</div>",
+                    f"<div style='color:#d00000;font-weight:600;'>✘ 答錯<br>此為：{picked_name}</div>",
                     unsafe_allow_html=True
                 )
 
@@ -545,14 +539,15 @@ elif mode_is_3:
             if chosen == q["filename"]:
                 score += 1
 
+    # ==== 進度條 ====
     progress_ratio = done / len(questions) if questions else 0
     st.markdown(
         f"""
-        <div class="progress-wrapper">
+        <div style='margin-top:8px;font-size:0.9rem;'>
             進度：{done}/{len(questions)}　|　答對：{score}
         </div>
-        <div class="progress-bar-bg">
-            <div class="progress-bar-fill" style="width:{progress_ratio*100}%;"></div>
+        <div style='height:8px;width:100%;background:#e9ecef;border-radius:4px;overflow:hidden;margin-top:4px;margin-bottom:24px;'>
+            <div style='height:8px;width:{progress_ratio*100}%;background:#74c69d;'></div>
         </div>
         """,
         unsafe_allow_html=True,
@@ -560,6 +555,7 @@ elif mode_is_3:
 
     final_score = score
     final_done = done
+
 
 # ========== 重新開始本模式（最底） ==========
 st.markdown("---")
