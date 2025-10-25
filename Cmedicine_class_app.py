@@ -447,73 +447,63 @@ elif mode_is_3:
     score = 0
     done = 0
 
-    # CSS：強制兩欄 48% / 不換行 / 圖片縮小 / 框貼緊圖片
+    # CSS：強制左右並排 + 框貼圖 + 按鈕無灰底、無多餘空白
     st.markdown("""
     <style>
-    /* 讓 st.columns(2) 在手機依然維持左右並排，不自動斷行成直排 */
     div[data-testid="stHorizontalBlock"] {
         flex-wrap: nowrap !important;
     }
-    /* 每一欄佔 48%，保留 4% 給左右縫隙，避免總寬>100% 導致炸版 */
     div[data-testid="column"] {
         flex: 0 0 48% !important;
         max-width: 48% !important;
-        padding-left: 2px !important;
-        padding-right: 2px !important;
+        padding-left: 1px !important;
+        padding-right: 1px !important;
+        margin: 0 !important;
     }
 
-    /* 外容器：負責限制圖片最大寬度並置中，避免太大撐滿整個 48% */
-    .choice-wrapper-tight {
-        width: 100%;
-        display: flex;
-        justify-content: center;
-        box-sizing: border-box;
-        margin: 0;
-        padding: 0;
-    }
-
-    /* 框本身，直接貼住圖片，沒有陰影沒有padding */
-    .choice-frame-tight {
-        border:3px solid transparent;
-        border-radius:8px;
+    .choice-btn-tight {
+        display:block;
+        background:none;
+        border:none;
+        padding:0;
+        margin:0 auto;
+        cursor:pointer;
+        width:90%;
+        max-width:120px;
         box-sizing:border-box;
+    }
+
+    .choice-frame-tight {
+        border:2.5px solid transparent;
+        border-radius:8px;
+        overflow:hidden;
+        box-sizing:border-box;
+        width:100%;
         margin:0;
         padding:0;
-        max-width:140px;   /* 上限寬度，避免畫面太大 */
-        width:100%;
     }
-    .choice-frame-tight.correct {
-        border-color:#2f9e44 !important; /* 綠框 */
-    }
-    .choice-frame-tight.wrong {
-        border-color:#d00000 !important; /* 紅框 */
-    }
+    .choice-frame-tight.correct { border-color:#2f9e44 !important; }
+    .choice-frame-tight.wrong { border-color:#d00000 !important; }
 
-    /* 圖片本體：寬度吃滿框，沒有任何邊距 */
     .choice-img-tight {
         display:block;
         width:100%;
         height:auto;
-        max-width:140px;
-        border-radius:8px;      /* 跟框同圓角，讓看起來是一體的 */
-        box-sizing:border-box;
+        border-radius:8px;
         margin:0;
         padding:0;
+        box-sizing:border-box;
     }
 
-    /* 隱藏 submit button 本身的灰色矩形 */
-    .invisible-submit > button,
-    .invisible-submit > button[kind="secondary"],
-    .invisible-submit > button[data-testid="baseButton-secondary"] {
+    /* 移除 submit 按鈕灰底 */
+    div.stButton > button[kind="secondary"] {
         background:none !important;
         border:none !important;
         padding:0 !important;
         margin:0 !important;
-        min-height:0 !important;
         height:0 !important;
-        color:transparent !important;
+        min-height:0 !important;
         box-shadow:none !important;
-        border-radius:0 !important;
     }
     </style>
     """, unsafe_allow_html=True)
@@ -524,13 +514,10 @@ elif mode_is_3:
         opts_files = st.session_state.opts_cache[f"opts_{i}"]
         ans_key = f"ans_{i}"
         chosen = st.session_state.get(ans_key, None)
-
         cols = st.columns(2)
 
         for col_idx, opt_file in enumerate(opts_files):
             img_path = os.path.join(IMAGE_DIR, opt_file)
-
-            # 框 class：依答題狀態改成 correct / wrong
             frame_cls = "choice-frame-tight"
             if chosen:
                 if chosen == q["filename"] and opt_file == chosen:
@@ -540,13 +527,11 @@ elif mode_is_3:
                 elif chosen != opt_file and opt_file == q["filename"]:
                     frame_cls = "choice-frame-tight correct"
 
-            # 轉圖片成 base64
             img_b64 = ""
             if os.path.isfile(img_path) and Image is not None:
                 try:
                     _img = Image.open(img_path)
-                    # 注意：縮圖基準我們用 160px 讓畫質不太差，再由 CSS 壓到 140px
-                    _img = crop_square_bottom(_img, 160)
+                    _img = crop_square_bottom(_img, 140)
                     import io, base64
                     buf = io.BytesIO()
                     _img.save(buf, format="PNG")
@@ -554,76 +539,38 @@ elif mode_is_3:
                 except Exception:
                     img_b64 = ""
 
-            if img_b64:
-                img_tag = f'<img class="choice-img-tight" src="data:image/png;base64,{img_b64}">'
-            else:
-                # fallback: 用檔案路徑
-                img_tag = f'<img class="choice-img-tight" src="file://{img_path}">'
+            img_tag = f'<img class="choice-img-tight" src="data:image/png;base64,{img_b64}">' if img_b64 else f'<img class="choice-img-tight" src="file://{img_path}">'
 
             with cols[col_idx]:
                 form_key = f"form_{i}_{col_idx}"
                 with st.form(key=form_key):
-                    # 圖片 + 框
                     st.markdown(
                         f"""
-                        <div class="choice-wrapper-tight">
+                        <button class="choice-btn-tight" type="submit">
                             <div class="{frame_cls}">
                                 {img_tag}
                             </div>
-                        </div>
+                        </button>
                         """,
                         unsafe_allow_html=True,
                     )
-
-                    # 隱形提交鈕
-                    clicked = st.form_submit_button(
-                        label="",
-                        use_container_width=True,
-                        type="secondary",
-                        disabled=False,
-                        key=f"submit_{i}_{col_idx}",
-                    )
-
-                    # 針對這顆 submit_button 注入隱形樣式
-                    st.markdown(
-                        "<style>"
-                        f"#{'submit_'+str(i)+'_'+str(col_idx)} {{"
-                        "background:none !important;"
-                        "border:none !important;"
-                        "padding:0 !important;"
-                        "margin:0 !important;"
-                        "min-height:0 !important;"
-                        "height:0 !important;"
-                        "color:transparent !important;"
-                        "box-shadow:none !important;"
-                        "border-radius:0 !important;"
-                        "}}"
-                        "</style>",
-                        unsafe_allow_html=True
-                    )
-
+                    clicked = st.form_submit_button(label="", use_container_width=True)
                     if clicked:
                         st.session_state[ans_key] = opt_file
                         st.rerun()
 
-        # 文字解析（答題後顯示）
+        # 答題解析
         if chosen:
             if chosen == q["filename"]:
-                st.markdown(
-                    "<div style='color:#2f9e44;font-weight:600;'>✔ 正確！</div>",
-                    unsafe_allow_html=True
-                )
+                st.markdown("<div style='color:#2f9e44;font-weight:600;'>✔ 正確！</div>", unsafe_allow_html=True)
             else:
                 picked_name = filename_to_name.get(chosen, "（未知）")
                 st.markdown(
                     f"<div style='color:#d00000;font-weight:600;'>✘ 答錯<br>此為：{picked_name}</div>",
                     unsafe_allow_html=True
                 )
-
-                # 錯題紀錄
                 signature = f"mode3-{i}-{chosen}"
-                already_logged = any(w.get("sig") == signature for w in st.session_state.wrong_answers)
-                if not already_logged:
+                if not any(w.get("sig") == signature for w in st.session_state.wrong_answers):
                     st.session_state.wrong_answers.append({
                         "sig": signature,
                         "question": f"請找出：{q['name']}",
@@ -635,29 +582,27 @@ elif mode_is_3:
 
         st.markdown("<hr style='margin:16px 0;' />", unsafe_allow_html=True)
 
-        # 計分統計
         if chosen is not None:
             done += 1
             if chosen == q["filename"]:
                 score += 1
 
-    # 進度條 + 答對題數
+    # 進度條
     progress_ratio = done / len(questions) if questions else 0
     st.markdown(
         f"""
         <div style='margin-top:8px;font-size:0.9rem;'>
             進度：{done}/{len(questions)}　|　答對：{score}
         </div>
-        <div style='height:8px;width:100%;background:#e9ecef;border-radius:4px;overflow:hidden;
-                    margin-top:4px;margin-bottom:24px;'>
+        <div style='height:8px;width:100%;background:#e9ecef;border-radius:4px;overflow:hidden;margin-top:4px;margin-bottom:24px;'>
             <div style='height:8px;width:{progress_ratio*100}%;background:#74c69d;'></div>
         </div>
         """,
         unsafe_allow_html=True,
     )
-
     final_score = score
     final_done = done
+
 
 
 
