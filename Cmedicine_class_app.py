@@ -447,24 +447,40 @@ elif mode_is_3:
     score = 0
     done = 0
 
-    # CSS：控制圖片框線 & 按鈕隱形化
+    # CSS：兩張卡片並排置中 + 小間距 + 框線 + 小按鈕貼底
     st.markdown("""
     <style>
-    .img-frame {
+    /* 控制整個兩欄區塊的行為 */
+    div[data-testid="stHorizontalBlock"] {
+        flex-wrap: nowrap !important;
+        justify-content: center !important;
+        gap: 8px !important;
+    }
+
+    /* 每一欄限制最大寬度，避免它吃滿手機整寬 */
+    div[data-testid="column"] {
+        max-width: 140px !important;
+        flex: 0 0 auto !important;
+        padding-left: 4px !important;
+        padding-right: 4px !important;
+    }
+
+    /* 框外觀，預設透明，答後變綠/紅 */
+    .img-frame-box {
         display: inline-block;
         border: 3px solid transparent;
         border-radius: 8px;
         padding: 0;
         margin: 0;
     }
-    .img-frame.correct {
+    .img-frame-box.correct {
         border-color: #2f9e44;
     }
-    .img-frame.wrong {
+    .img-frame-box.wrong {
         border-color: #d00000;
     }
 
-    /* 把按鈕變成透明扁平小點擊區塊，貼在圖片下方 */
+    /* 把按鈕本體變成只是一個點擊區，不要大灰塊 */
     div.stButton > button {
         background:none !important;
         border:none !important;
@@ -487,70 +503,64 @@ elif mode_is_3:
         ans_key = f"ans_{i}"
         chosen = st.session_state.get(ans_key, None)
 
-        # 準備左右兩張裁好的正方圖，並決定框線class
-        processed_imgs = []
+        # --- 準備兩張正方形小圖 (110x110)，外加框色狀態 ---
+        processed = []
         for opt_file in opts_files:
             img_path = os.path.join(IMAGE_DIR, opt_file)
 
-            frame_class = "img-frame"
+            frame_class = "img-frame-box"
             if chosen:
                 if chosen == q["filename"] and opt_file == chosen:
-                    frame_class = "img-frame correct"
+                    frame_class = "img-frame-box correct"
                 elif chosen == opt_file and chosen != q["filename"]:
-                    frame_class = "img-frame wrong"
+                    frame_class = "img-frame-box wrong"
                 elif chosen != opt_file and opt_file == q["filename"]:
-                    frame_class = "img-frame correct"
+                    frame_class = "img-frame-box correct"
 
-            # 裁成正方形並縮到 110x110，存到暫存檔
-            tmp_display_path = img_path  # fallback 如果裁圖失敗就用原圖
+            # 產生暫存正方形圖
+            disp_path = img_path
             if os.path.exists(img_path) and Image is not None:
                 try:
                     img_obj = Image.open(img_path)
-                    square_img = crop_square_bottom(img_obj, 110)  # <-- 正方形裁底部
-                    # 暫存檔名：避免重名，用題號+檔名
-                    tmp_display_path = f"/tmp/{i}_{opt_file.replace('/', '_')}_110.png"
-                    square_img.save(tmp_display_path, format="PNG")
+                    square = crop_square_bottom(img_obj, 110)  # 裁成 110x110，保留底部
+                    disp_path = f"/tmp/{i}_{opt_file.replace('/', '_')}_110.png"
+                    square.save(disp_path, format="PNG")
                 except Exception:
                     pass
 
-            processed_imgs.append({
+            processed.append({
                 "file": opt_file,
-                "display": tmp_display_path,
+                "disp": disp_path,
                 "frame_class": frame_class,
             })
 
-        # 為了縮小左右距離，我們用三欄: 左(1) / spacer(0.15) / 右(1)
-        col_left, col_gap, col_right = st.columns([1, 0.15, 1])
+        # --- 建兩欄，並把它們置中顯示 ---
+        col_left, col_right = st.columns([1,1])
 
-        # ---- 左圖 ----
+        # 左選項
         with col_left:
-            left_info = processed_imgs[0]
+            left_info = processed[0]
             st.markdown(f"<div class='{left_info['frame_class']}'>", unsafe_allow_html=True)
-            if os.path.exists(left_info["display"]):
-                st.image(left_info["display"], width=110)
+            if os.path.exists(left_info["disp"]):
+                st.image(left_info["disp"], width=110)
             else:
                 st.image(os.path.join(IMAGE_DIR, left_info["file"]), width=110)
             st.markdown("</div>", unsafe_allow_html=True)
 
-            # 點擊左圖的「答題」按鈕（貼在圖下，透明）
             clicked_left = st.button(
-                " ",  # label 不顯示
+                " ",  # label 空白
                 key=f"btn_left_{i}",
             )
             if clicked_left:
                 st.session_state[ans_key] = left_info["file"]
                 st.rerun()
 
-        # 中間 gap 其實不用放東西，但 columns 需要佔位
-        with col_gap:
-            st.write("")
-
-        # ---- 右圖 ----
+        # 右選項
         with col_right:
-            right_info = processed_imgs[1]
+            right_info = processed[1]
             st.markdown(f"<div class='{right_info['frame_class']}'>", unsafe_allow_html=True)
-            if os.path.exists(right_info["display"]):
-                st.image(right_info["display"], width=110)
+            if os.path.exists(right_info["disp"]):
+                st.image(right_info["disp"], width=110)
             else:
                 st.image(os.path.join(IMAGE_DIR, right_info["file"]), width=110)
             st.markdown("</div>", unsafe_allow_html=True)
@@ -563,7 +573,7 @@ elif mode_is_3:
                 st.session_state[ans_key] = right_info["file"]
                 st.rerun()
 
-        # ====== 答案解析 ======
+        # === 解析區 ===
         if chosen:
             if chosen == q["filename"]:
                 st.markdown(
@@ -577,6 +587,7 @@ elif mode_is_3:
                     unsafe_allow_html=True
                 )
 
+                # 錯題紀錄
                 signature = f"mode3-{i}-{chosen}"
                 already_logged = any(w.get("sig") == signature for w in st.session_state.wrong_answers)
                 if not already_logged:
@@ -591,13 +602,13 @@ elif mode_is_3:
 
         st.markdown("<hr style='margin:16px 0;' />", unsafe_allow_html=True)
 
-        # 計分進度
+        # 計分統計
         if chosen is not None:
             done += 1
             if chosen == q["filename"]:
                 score += 1
 
-    # ===== 進度條 =====
+    # 進度條
     progress_ratio = done / len(questions) if questions else 0
     st.markdown(
         f"""
