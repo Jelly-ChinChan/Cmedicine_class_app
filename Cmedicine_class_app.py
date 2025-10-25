@@ -447,13 +447,53 @@ elif mode_is_3:
     score = 0
     done = 0
 
-    # 基本尺寸設定
-    TILE_SIZE = 110   # 單一小圖（正方形）邊長
-    GAP = 8           # 左右圖中間的間距（像現在看到的小空隙）
+    # 更大圖尺寸
+    TILE_SIZE = 140   # 單一小圖（正方形）邊長，原本110→140
+    GAP = 8           # 左右圖中間的間距
     COMBO_W = TILE_SIZE * 2 + GAP
     COMBO_H = TILE_SIZE
 
     from PIL import ImageDraw
+
+    # 全域 CSS：兩顆按鈕的容器橫向定位
+    st.markdown("""
+    <style>
+    .answer-row {
+        width: 100%;
+        display: flex;
+        flex-direction: row;
+        justify-content: center; /* 整體置中 */
+        align-items: flex-start;
+        gap: 8px;
+        margin-top: 8px;
+        margin-bottom: 8px;
+    }
+    .choice-btn-slot {
+        width: 140px;        /* 跟 TILE_SIZE 對齊，確保按鈕正好在各自那半邊底下 */
+        max-width: 140px;
+        text-align: center;
+        display: flex;
+        flex-direction: column;
+        align-items: center;
+    }
+    /* 美化按鈕外觀，並固定寬度不要太大 */
+    div.stButton > button {
+        background: #f8f9fa !important;
+        border: 1px solid #adb5bd !important;
+        color: #212529 !important;
+        font-size: 0.9rem !important;
+        line-height: 1.2 !important;
+        border-radius: 6px !important;
+        padding: 6px 8px !important;
+        margin: 0 auto !important;
+        width: 120px !important;
+        min-height: 0 !important;
+        height: auto !important;
+        box-shadow: none !important;
+        display: block !important;
+    }
+    </style>
+    """, unsafe_allow_html=True)
 
     def make_square_tile(path):
         """裁成正方形並縮成 TILE_SIZE x TILE_SIZE，保留底部特徵。"""
@@ -472,11 +512,11 @@ elif mode_is_3:
                       highlight_left=None,
                       highlight_right=None):
         """
-        把左右兩張 tile 拼成一張圖，並在必要時畫紅/綠框。
-        highlight_left / highlight_right 可以是:
-            None        -> 不畫框
-            "correct"   -> 綠框
-            "wrong"     -> 紅框
+        把左右兩張 tile 拼成一張圖 (1x2 橫向)，並可選擇畫紅/綠框。
+        highlight_left / highlight_right:
+            None      -> 不畫框
+            "correct" -> 綠框
+            "wrong"   -> 紅框
         """
         combo = Image.new("RGB", (COMBO_W, COMBO_H), color=(255, 255, 255))
         combo.paste(left_tile, (0, 0))
@@ -485,10 +525,10 @@ elif mode_is_3:
         draw = ImageDraw.Draw(combo)
 
         def draw_border(x0, y0, size, color_rgb):
-            pad = 2  # 線條往內貼一點，避免超出
+            pad = 3  # 微內縮，避免框線貼邊被裁
             x1 = x0 + size - 1
             y1 = y0 + size - 1
-            # 畫一個稍微粗一點的矩形框（3px左右）
+            # 用多層細線堆成較粗邊
             for off in range(3):
                 draw.rectangle(
                     [x0 + pad + off, y0 + pad + off, x1 - pad - off, y1 - pad - off],
@@ -496,13 +536,11 @@ elif mode_is_3:
                     width=1
                 )
 
-        # 左格框
         if highlight_left == "correct":
-            draw_border(0, 0, TILE_SIZE, (47, 158, 68))       # #2f9e44 綠
+            draw_border(0, 0, TILE_SIZE, (47, 158, 68))     # 綠 #2f9e44
         elif highlight_left == "wrong":
-            draw_border(0, 0, TILE_SIZE, (208, 0, 0))         # #d00000 紅
+            draw_border(0, 0, TILE_SIZE, (208, 0, 0))       # 紅 #d00000
 
-        # 右格框
         if highlight_right == "correct":
             draw_border(TILE_SIZE + GAP, 0, TILE_SIZE, (47, 158, 68))
         elif highlight_right == "wrong":
@@ -510,61 +548,49 @@ elif mode_is_3:
 
         return combo
 
-    # ====== 主回圈：逐題出題 ======
     for i, q in enumerate(questions):
         st.markdown(f"**Q{i+1}. {q['name']}**")
 
-        # 兩個候選檔名（左、右）
+        # 兩個候選檔名：左、右
         opts_files = st.session_state.opts_cache[f"opts_{i}"]
         left_file = opts_files[0]
         right_file = opts_files[1]
 
         ans_key = f"ans_{i}"
         chosen = st.session_state.get(ans_key, None)
+        correct_file = q["filename"]
 
-        # 決定哪個是正解
-        correct_file = q["filename"]  # 這一題正確答案的檔名
-
-        # 生成左右 tile
+        # 準備左右 tile
         left_tile = make_square_tile(os.path.join(IMAGE_DIR, left_file))
         right_tile = make_square_tile(os.path.join(IMAGE_DIR, right_file))
 
-        # ====== 根據作答狀態，決定框線顏色 ======
-        # highlight_left / highlight_right 可是 None / "correct" / "wrong"
+        # 決定框色
         highlight_left = None
         highlight_right = None
 
-        if chosen:  # 學生已經作答
-            # 如果選的是左圖
+        if chosen:
             if chosen == left_file:
                 if left_file == correct_file:
-                    # 左答對 → 左綠
                     highlight_left = "correct"
                 else:
-                    # 左答錯 → 左紅
                     highlight_left = "wrong"
-                    # 同時把正解的那邊標綠
                     if right_file == correct_file:
                         highlight_right = "correct"
-            # 如果選的是右圖
             elif chosen == right_file:
                 if right_file == correct_file:
-                    # 右答對 → 右綠
                     highlight_right = "correct"
                 else:
-                    # 右答錯 → 右紅
                     highlight_right = "wrong"
-                    # 同時把正解的那邊標綠
                     if left_file == correct_file:
                         highlight_left = "correct"
             else:
-                # 非預期狀況，但以防萬一：就只標出正解
+                # 非預期 fallback：標出正解
                 if left_file == correct_file:
                     highlight_left = "correct"
                 if right_file == correct_file:
                     highlight_right = "correct"
 
-        # ====== 把兩張 tile 合成一張最終圖片（帶紅/綠框） ======
+        # 合圖（已經是橫向 1x2）
         combo_img = compose_combo(
             left_tile,
             right_tile,
@@ -575,44 +601,54 @@ elif mode_is_3:
         combo_path = f"/tmp/combo_{i}.png"
         combo_img.save(combo_path)
 
-        # ====== 顯示合成後的 1x2 並列圖片 ======
+        # 顯示這題的合成圖
+        # 寬度就是 COMBO_W，大約 140+8+140=288px，手機直式很安全
         st.image(combo_path, width=COMBO_W)
 
-        # ====== 顯示兩個按鈕：左在左邊、右在右邊 ======
-        # 用兩欄把兩顆按鈕放在各自圖片正下方位置
-        btn_left_col, btn_right_col = st.columns([1, 1])
+        # ====== 按鈕列（左右對齊到各自圖的下方） ======
+        # 我們用一個 flex row 的兩個 slot，slot 寬=140px，分別疊入各自的 st.button
+        # 這邊的技巧：先畫出 flex 容器，再在下面立刻渲染兩個 button。
+        # Streamlit 會把 button 各自渲染成 <div data-testid="stButton">...，這些會跟在我們的 slot 後面，
+        # 但因為 slot 是固定寬+flex row，所以視覺上每顆按鈕會出現在對應半邊底下。
+        st.markdown(
+            """
+            <div class="answer-row">
+                <div class="choice-btn-slot" id="slot-left"></div>
+                <div class="choice-btn-slot" id="slot-right"></div>
+            </div>
+            """,
+            unsafe_allow_html=True
+        )
 
-        with btn_left_col:
-            if st.button("選左邊", key=f"left_{i}"):
-                st.session_state[ans_key] = left_file
-                st.rerun()
+        # 把兩顆按鈕實際畫出來，各自緊接在前一個 markdown 後面
+        # 左鍵
+        if st.button("選左邊", key=f"left_{i}"):
+            st.session_state[ans_key] = left_file
+            st.rerun()
+        # 右鍵
+        if st.button("選右邊", key=f"right_{i}"):
+            st.session_state[ans_key] = right_file
+            st.rerun()
 
-        with btn_right_col:
-            # 右鍵放右欄，視覺上就會在右圖下
-            if st.button("選右邊", key=f"right_{i}"):
-                st.session_state[ans_key] = right_file
-                st.rerun()
-
-        # ====== 答案解析 / 成績記錄 ======
+        # ====== 題目回饋 ======
         if chosen:
             if chosen == correct_file:
                 st.markdown(
-                    "<div style='color:#2f9e44;font-weight:600; margin-bottom:8px;'>"
+                    "<div style='color:#2f9e44;font-weight:600; margin:8px 0;'>"
                     "✔ 正確！"
                     "</div>",
                     unsafe_allow_html=True
                 )
             else:
-                # 找出學生實際點的是哪個名子
                 picked_name = filename_to_name.get(chosen, "（未知）")
                 st.markdown(
-                    f"<div style='color:#d00000;font-weight:600; margin-bottom:8px;'>"
+                    f"<div style='color:#d00000;font-weight:600; margin:8px 0;'>"
                     f"✘ 答錯<br>此為：{picked_name}"
                     f"</div>",
                     unsafe_allow_html=True
                 )
 
-                # 錯題回顧紀錄
+                # 紀錄錯題
                 signature = f"mode3-{i}-{chosen}"
                 if not any(w.get("sig") == signature for w in st.session_state.wrong_answers):
                     st.session_state.wrong_answers.append({
@@ -626,13 +662,13 @@ elif mode_is_3:
 
         st.markdown("<hr style='margin:16px 0;' />", unsafe_allow_html=True)
 
-        # 進度統計
+        # 統計答題數/分數
         if chosen is not None:
             done += 1
             if chosen == correct_file:
                 score += 1
 
-    # ====== 頁面底部：進度條與統計 ======
+    # ====== 頁尾進度條 ======
     progress_ratio = done / len(questions) if questions else 0
     st.markdown(
         f"""
