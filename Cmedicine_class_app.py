@@ -450,12 +450,64 @@ elif mode_is_3:
     # 強制 st.columns(2) 永遠左右並排（手機也不換行）
     st.markdown("""
     <style>
+    /* 讓兩欄在手機也保持左右 50% 並且不自動換行 */
+    div[data-testid="stHorizontalBlock"] {
+        flex-wrap: nowrap !important;
+    }
     div[data-testid="column"] {
         flex: 0 0 50% !important;
         max-width: 50% !important;
+        padding-right: 4px !important;
+        padding-left: 4px !important;
     }
-    div[data-testid="stHorizontalBlock"] {
-        flex-wrap: nowrap !important;
+
+    /* 外框：移除額外外白邊，改成緊貼 */
+    .choice-wrapper {
+        width: 100%;
+        max-width: 100%;
+        box-sizing: border-box;
+        margin: 0;
+        padding: 0;
+    }
+
+    /* 包住圖片的有框容器 */
+    .choice-frame {
+        border-radius:8px;
+        box-shadow:0 2px 6px rgba(0,0,0,0.08);
+        overflow:hidden;
+        border:3px solid transparent;
+        width:100%;
+        max-width:100%;
+        box-sizing:border-box;
+        margin:0;
+        padding:0;
+    }
+    .choice-frame.correct {
+        border-color:#2f9e44 !important; /* 綠框 */
+    }
+    .choice-frame.wrong {
+        border-color:#d00000 !important; /* 紅框 */
+    }
+
+    /* 圖片本體：滿寬，等比例縮小，不要炸出去 */
+    .choice-img {
+        display:block;
+        width:100%;
+        height:auto;
+        max-width:100%;
+        box-sizing:border-box;
+    }
+
+    /* 隱藏 submit 按鈕本身的預設樣式（因為我們用圖片當按鈕） */
+    .invisible-submit > button {
+        background:none !important;
+        border:none !important;
+        padding:0 !important;
+        margin:0 !important;
+        width:100% !important;
+        height:auto !important;
+        box-shadow:none !important;
+        border-radius:0 !important;
     }
     </style>
     """, unsafe_allow_html=True)
@@ -468,51 +520,91 @@ elif mode_is_3:
         chosen = st.session_state.get(ans_key, None)
 
         cols = st.columns(2)
+
         for col_idx, opt_file in enumerate(opts_files):
             img_path = os.path.join(IMAGE_DIR, opt_file)
-            border_color = None
+
+            # 判斷框線顏色 class
+            frame_class = "choice-frame"
             if chosen:
                 if chosen == q["filename"] and opt_file == chosen:
-                    border_color = "#2f9e44"  # 綠框
+                    frame_class = "choice-frame correct"
                 elif chosen == opt_file and chosen != q["filename"]:
-                    border_color = "#d00000"  # 紅框
+                    frame_class = "choice-frame wrong"
                 elif chosen != opt_file and opt_file == q["filename"]:
-                    border_color = "#2f9e44"  # 正解亮綠框
+                    frame_class = "choice-frame correct"
 
+            # 準備圖片的 base64
+            img_b64 = ""
             if os.path.isfile(img_path) and Image is not None:
-                img = Image.open(img_path)
-                img = crop_square_bottom(img, PAIR_SIZE)
-                import io, base64
-                buf = io.BytesIO()
-                img.save(buf, format="PNG")
-                b64 = base64.b64encode(buf.getvalue()).decode("utf-8")
-                border_css = (
-                    f"border:4px solid {border_color};" if border_color else
-                    "border:4px solid transparent;"
-                )
+                try:
+                    _img = Image.open(img_path)
+                    _img = crop_square_bottom(_img, PAIR_SIZE)
+                    import io, base64
+                    buf = io.BytesIO()
+                    _img.save(buf, format="PNG")
+                    img_b64 = base64.b64encode(buf.getvalue()).decode("utf-8")
+                except Exception:
+                    img_b64 = ""
 
-                with cols[col_idx]:
-                    # 按鈕形式：圖片當作按鈕
-                    if st.button(
-                        "",
-                        key=f"btn_{i}_{col_idx}",
-                        use_container_width=True,
-                    ):
-                        st.session_state[ans_key] = opt_file
-                        st.rerun()
+            # 如果 PIL 失敗，用檔案路徑
+            if img_b64:
+                img_tag = f'<img class="choice-img" src="data:image/png;base64,{img_b64}">'
+            else:
+                img_tag = f'<img class="choice-img" src="file://{img_path}">'
 
+            with cols[col_idx]:
+                # 我們用 form + submit_button，但把按鈕本身隱形
+                form_key = f"form_{i}_{col_idx}"
+                with st.form(key=form_key):
                     st.markdown(
                         f"""
-                        <div style="{border_css} border-radius:8px; overflow:hidden;">
-                            <img src="data:image/png;base64,{b64}" width="100%">
+                        <div class="choice-wrapper">
+                            <div class="{frame_class}">
+                                {img_tag}
+                            </div>
                         </div>
                         """,
                         unsafe_allow_html=True,
                     )
 
+                    clicked = st.form_submit_button(
+                        label="",
+                        help=None,
+                        use_container_width=True,
+                        type="secondary",
+                        disabled=False,
+                        key=f"submit_{i}_{col_idx}",
+                    )
+
+                    # form_submit_button 會生成一個按鈕，我們用 CSS 去把它外觀拿掉
+                    st.markdown(
+                        "<style>"
+                        f"#{'submit_'+str(i)+'_'+str(col_idx)} {{"
+                        "background:none !important;"
+                        "border:none !important;"
+                        "padding:0 !important;"
+                        "margin:0 !important;"
+                        "min-height:0 !important;"
+                        "height:0 !important;"
+                        "color:transparent !important;"
+                        "box-shadow:none !important;"
+                        "}}"
+                        "</style>",
+                        unsafe_allow_html=True
+                    )
+
+                    if clicked:
+                        st.session_state[ans_key] = opt_file
+                        st.rerun()
+
+        # 下方解析
         if chosen:
             if chosen == q["filename"]:
-                st.markdown("<div style='color:#2f9e44;font-weight:600;'>✔ 正確！</div>", unsafe_allow_html=True)
+                st.markdown(
+                    "<div style='color:#2f9e44;font-weight:600;'>✔ 正確！</div>",
+                    unsafe_allow_html=True
+                )
             else:
                 picked_name = filename_to_name.get(chosen, "（未知）")
                 st.markdown(
@@ -534,12 +626,13 @@ elif mode_is_3:
 
         st.markdown("<hr style='margin:16px 0;' />", unsafe_allow_html=True)
 
+        # 計分統計
         if chosen is not None:
             done += 1
             if chosen == q["filename"]:
                 score += 1
 
-    # ==== 進度條 ====
+    # 進度條 + 答對題數
     progress_ratio = done / len(questions) if questions else 0
     st.markdown(
         f"""
@@ -555,6 +648,7 @@ elif mode_is_3:
 
     final_score = score
     final_done = done
+
 
 
 # ========== 重新開始本模式（最底） ==========
