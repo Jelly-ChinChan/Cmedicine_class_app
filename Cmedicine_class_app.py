@@ -1,27 +1,30 @@
 # Cmedicine_class_app.py
 #
-# 中藥圖像小測驗（含手機 2x2、錯題回顧）
+# 中藥圖像小測驗（手機版2x2 fallback + 測驗模式外觀強化）
 #
 # 模式：
 #   1. 全部題目：看「圖片」選「藥名」
 #   2. 隨機10題測驗：同上，但隨機抽 10 題
 #   3. 圖片選擇模式（2x2）：看「藥名」選「正確圖片」
-#      - 手機與電腦都維持 2x2
-#      - 點圖片即作答
-#      - 綠/紅框即時標示
-#      - 答錯顯示「✘ 答錯 / 此為：<你點到的藥材名稱>」
+#      - 使用 fallback 2x2 版：
+#        → 每題只產生一組 columns(2)
+#        → 左欄顯示2張圖(上/下)，右欄顯示2張圖(上/下)
+#        → 即使在某些手機上 columns 最後變單欄，也只會「左欄整組」後「右欄整組」，視覺上仍成對
 #
 # 共同特性：
-#   - 圖片統一正方形（從下往上裁，保留底部）
-#   - 每題一作答就立即顯示解析
-#   - 全部題目結束後顯示進度＆得分
-#   - 自動記錄錯題並在頁面底部「錯題回顧」區塊呈現
+#   - 圖片裁成正方形（從下往上保留）
+#   - 點圖即可作答；馬上顯示綠/紅框、解析
+#   - 底部顯示進度＆得分
+#   - 錯題會記錄在 st.session_state.wrong_answers（目前不顯示，但你可以再加回回顧）
+#
+# 強化：
+#   - 隱藏 Streamlit header / footer / 菜單 → 更像正式考試畫面
 #
 # requirements.txt 請至少包含：
-# streamlit
-# pandas
-# openpyxl
-# pillow
+#   streamlit
+#   pandas
+#   openpyxl
+#   pillow
 
 import streamlit as st
 import pandas as pd
@@ -46,7 +49,7 @@ except ImportError:
 EXCEL_PATH = "Cmedicine_class_app.xlsx"  # 題庫
 IMAGE_DIR = "photos"                     # 圖片資料夾
 FIXED_SIZE = 300                         # 模式1/2題目用大圖(px)
-GRID_SIZE = 150                          # 模式3四宮格小圖(px)
+GRID_SIZE = 150                          # 模式3小圖(px)
 NUM_OPTIONS = 4                          # 4選1
 DEFAULT_MODE = "全部題目"
 
@@ -56,45 +59,31 @@ st.set_page_config(
     layout="centered",
 )
 
-# ================== CSS：手機也固定兩欄 ==================
-# 我們強制 st.columns(2) 在任何螢幕都保持左右兩欄 (各50%)
-# 並加上 !important 與 @media 再保險，避免被 Streamlit 的行動版樣式覆蓋
+# ================== CSS ==================
+# 1. 隱藏 Streamlit header / footer / 主功能列
+# 2. 圖片卡片的樣式（陰影、圓角）
+# 3. 基礎 columns spacing（保留一點間距，不再強行覆蓋成兩欄，因為我們自己做 fallback）
 st.markdown(
     """
     <style>
-    /* 外層 columns 容器：用 flex row + wrap，間距小一點 */
+    /* 移除 Streamlit 頁面預設頁首與選單 */
+    header[data-testid="stHeader"] {
+        display: none !important;
+    }
+    /* 移除底部的 footer (例如 "Made with Streamlit") */
+    footer {
+        visibility: hidden !important;
+        height: 0px !important;
+    }
+    /* 移除右上角 hamburger / deploy 等浮動按鈕容器 */
+    .stApp [data-testid="stToolbar"] {
+        display: none !important;
+    }
+
+    /* columns 間距微調：避免太擠 */
     div.stColumns {
-        display: flex !important;
-        flex-wrap: wrap !important;
-        flex-direction: row !important;
         gap: 0.75rem !important;
         margin-bottom: 0.75rem !important;
-    }
-
-    /* 每個 column：固定佔 50% 寬，禁止掉行動版 "100% 寬" 行為 */
-    div.stColumns > div[data-testid="column"] {
-        flex: 0 0 calc(50% - 0.75rem) !important;
-        width: calc(50% - 0.75rem) !important;
-        max-width: calc(50% - 0.75rem) !important;
-        min-width: calc(50% - 0.75rem) !important;
-        padding-right: 0px !important;
-        padding-left: 0px !important;
-    }
-
-    /* 再加一層保險：在小螢幕下一樣鎖兩欄 */
-    @media (max-width: 768px) {
-        div.stColumns {
-            display: flex !important;
-            flex-wrap: wrap !important;
-            flex-direction: row !important;
-            gap: 0.75rem !important;
-        }
-        div.stColumns > div[data-testid="column"] {
-            flex: 0 0 calc(50% - 0.75rem) !important;
-            width: calc(50% - 0.75rem) !important;
-            max-width: calc(50% - 0.75rem) !important;
-            min-width: calc(50% - 0.75rem) !important;
-        }
     }
 
     /* 圖片卡：陰影+圓角 */
@@ -103,7 +92,7 @@ st.markdown(
         border-radius: 8px;
         overflow: hidden;
         box-shadow: 0 2px 6px rgba(0,0,0,0.08);
-        margin-bottom: 0.25rem;
+        margin-bottom: 0.5rem;
     }
     </style>
     """,
@@ -114,10 +103,7 @@ st.markdown(
 def load_question_bank():
     """
     從 Excel 讀入題庫：
-    [
-      {"name": "某藥名", "filename": "1.jpg"},
-      ...
-    ]
+    回傳 list[ { "name":藥名, "filename":圖片檔名 }, ... ]
     """
     if not os.path.isfile(EXCEL_PATH):
         st.error("❌ 找不到 Excel 題庫，請確認 Cmedicine_class_app.xlsx 與程式在同層。")
@@ -161,9 +147,9 @@ def load_question_bank():
 def crop_square_bottom(img, size=300):
     """
     1. 裁成正方形
-       - 如果圖太高：從上面裁掉多的，保留底部
+       - 如果圖太高：從上面裁掉，保留底部
        - 如果圖太寬：左右置中裁
-    2. 再縮成指定 size x size
+    2. 再縮成指定的 size x size
     """
     w, h = img.size
     if h > w:
@@ -183,7 +169,7 @@ def image_to_base64(image):
 
 def render_img_card(path, size=300, border_color=None):
     """
-    顯示圖卡 (陰影+圓角)，可帶綠框/紅框。
+    顯示一張圖片卡片，可帶紅/綠框
     """
     if not os.path.isfile(path):
         st.warning(f"⚠ 找不到圖片：{path}")
@@ -213,7 +199,7 @@ def render_img_card(path, size=300, border_color=None):
         except Exception:
             pass
 
-    # fallback：如果 PIL 失敗
+    # fallback（理論上不太會用到）
     border_css = (
         f"border:4px solid {border_color};"
         if border_color
@@ -232,8 +218,9 @@ def render_img_card(path, size=300, border_color=None):
 # ================= 出題 & 狀態 =================
 def build_options(correct, pool, k=4):
     """
-    建立亂序的4選項 (correct + 干擾)
-    去重後隨機。
+    建立該題的4個選項 (1正確 + 3干擾)；亂序、去重
+    correct: 正確答案 (name 或 filename)
+    pool:    候選全集
     """
     distractors = [p for p in pool if p != correct]
     random.shuffle(distractors)
@@ -245,11 +232,11 @@ def build_options(correct, pool, k=4):
 
 def init_mode(bank, mode):
     """
-    初始化模式：
-      - 全部題目：全拿
+    根據模式挑題：
+      - 全部題目：所有題
       - 隨機10題測驗：抽10題
       - 圖片選擇模式（2x2）：抽10題
-    並重置所有作答記錄和錯題回顧。
+    同時清除舊作答與錯題紀錄
     """
     if mode == "隨機10題測驗":
         qset = random.sample(bank, min(10, len(bank)))
@@ -264,18 +251,18 @@ def init_mode(bank, mode):
     st.session_state.questions = qset
     st.session_state.opts_cache = {}
 
-    # 清掉上一輪作答
+    # 清之前答過的
     for k in list(st.session_state.keys()):
         if k.startswith("ans_"):
             del st.session_state[k]
 
-    # 重置錯題回顧
+    # 清錯題回顧資料
     st.session_state.wrong_answers = []
 
 
 # ================= 啟動 / 模式切換 =================
 bank = load_question_bank()
-filename_to_name = {item["filename"]: item["name"] for item in bank}  # 給模式3用
+filename_to_name = {item["filename"]: item["name"] for item in bank}
 
 sidebar_mode = st.sidebar.radio(
     "選擇測驗模式",
@@ -292,19 +279,17 @@ all_names = [q["name"] for q in questions]
 if "wrong_answers" not in st.session_state:
     st.session_state.wrong_answers = []
 
-# 幫每一題建立固定的 4 個選項（避免重整時順序跳動）
+# 預先為每題固定4個選項，避免重整洗牌
 for i, q in enumerate(questions):
     cache_key = f"opts_{i}"
     if cache_key not in st.session_state.opts_cache:
         if st.session_state.mode in ["全部題目", "隨機10題測驗"]:
-            # 模式1/2: 選的是藥名
             st.session_state.opts_cache[cache_key] = build_options(
                 q["name"],
                 all_names,
                 k=NUM_OPTIONS
             )
         else:
-            # 模式3: 選的是圖檔
             all_files = [x["filename"] for x in bank]
             st.session_state.opts_cache[cache_key] = build_options(
                 q["filename"],
@@ -312,9 +297,7 @@ for i, q in enumerate(questions):
                 k=NUM_OPTIONS
             )
 
-
-# ================= 模式1 & 模式2 =================
-# 題型：看圖片 -> 選藥名 (radio)
+# ================= 模式1 & 模式2：看圖片 → 選藥名 =================
 if st.session_state.mode in ["全部題目", "隨機10題測驗"]:
     score = 0
     done = 0
@@ -354,7 +337,7 @@ if st.session_state.mode in ["全部題目", "隨機10題測驗"]:
                     unsafe_allow_html=True,
                 )
 
-                # 記錄錯題
+                # 紀錄錯題
                 signature = f"mode12-{i}-{chosen}"
                 already_logged = any(
                     w.get("sig") == signature
@@ -366,13 +349,13 @@ if st.session_state.mode in ["全部題目", "隨機10題測驗"]:
                         "question": "辨識圖片屬於哪個中藥？",
                         "correct": q["name"],
                         "chosen": chosen,
-                        "chosen_name": chosen,  # 在此模式中 chosen 本身就是藥名
+                        "chosen_name": chosen,
                         "img": q["filename"],
                     })
 
         st.markdown("<hr style='margin:20px 0;' />", unsafe_allow_html=True)
 
-    # 進度＆得分（整份題目後顯示）
+    # 全題後顯示成績
     progress = done / len(questions) if questions else 0
     st.markdown(
         f"""
@@ -401,13 +384,17 @@ if st.session_state.mode in ["全部題目", "隨機10題測驗"]:
         unsafe_allow_html=True,
     )
 
-# ================= 模式3：圖片選擇模式（2x2） =================
-# 題型：顯示藥名 -> 學生從4張圖片中選正確的那一張
-# 回饋：
-#   - 你按的那張圖：
-#       ✔ 正確 → 綠框 + "✔ 正確！"
-#       ✘ 錯誤 → 紅框 + "✘ 答錯 / 此為：<你選到的那張藥材名稱>"
-#   - 正確圖同時亮綠框
+# ================= 模式3：圖片選擇模式（2x2 fallback） =================
+#
+# 結構重點：
+#   - 我們取該題4張圖片 -> opts[0], opts[1], opts[2], opts[3]
+#   - 用 st.columns(2) 只建立左右兩欄 cols_left, cols_right
+#   - 左欄放 opts[0]、opts[1]（上下各一張）
+#   - 右欄放 opts[2]、opts[3]（上下各一張）
+#
+#   這樣即使在極小手機上 columns 被壓成單欄，也會先整組顯示左欄(兩張)，再整組顯示右欄(兩張)。
+#   視覺上仍像成對對比，而不是4張圖一長串排下去。
+#
 elif st.session_state.mode == "圖片選擇模式（2x2）":
     score = 0
     done = 0
@@ -416,81 +403,136 @@ elif st.session_state.mode == "圖片選擇模式（2x2）":
         st.markdown(f"**Q{i+1}. {q['name']}**")
 
         opts = st.session_state.opts_cache[f"opts_{i}"]
+        # 如果剛好不足4張（極端狀況），補到4
+        while len(opts) < 4:
+            extra = random.choice([x["filename"] for x in bank])
+            if extra not in opts:
+                opts.append(extra)
+
+        # 保證順序長度4
+        opts = (opts + opts[:4])[:4]
+
         ans_key = f"ans_{i}"
         chosen = st.session_state.get(ans_key, None)
 
-        # 我們建兩列，每列 st.columns(2)
-        # CSS 已強制不管在手機或電腦都保持左右兩欄各佔50%
-        rows = [opts[:2], opts[2:]]
-        for row_idx, row_opts in enumerate(rows):
-            cols = st.columns(2)
-            for col_idx, opt_filename in enumerate(row_opts):
+        # 分成左右兩欄
+        col_left, col_right = st.columns(2)
+
+        # 左欄顯示 opts[0], opts[1]
+        with col_left:
+            for sub_idx in [0, 1]:
+                opt_filename = opts[sub_idx]
                 img_path = os.path.join(IMAGE_DIR, opt_filename)
 
-                with cols[col_idx]:
-                    btn_key = f"btn_{i}_{row_idx}_{col_idx}"
-                    if st.button("", key=btn_key, help="點這張圖作答"):
-                        st.session_state[ans_key] = opt_filename
-                        chosen = opt_filename  # 立刻更新畫面
+                btn_key = f"btn_{i}_L_{sub_idx}"
+                if st.button("", key=btn_key, help="點這張圖作答"):
+                    st.session_state[ans_key] = opt_filename
+                    chosen = opt_filename
 
-                    # 邊框顏色判斷
-                    border_color = None
-                    if chosen:
-                        if chosen == q["filename"] and opt_filename == chosen:
-                            border_color = "#2f9e44"  # 你選的是正解 → 綠框
-                        elif chosen == opt_filename and chosen != q["filename"]:
-                            border_color = "#d00000"  # 你選錯了 → 紅框
-                        elif chosen != opt_filename and opt_filename == q["filename"]:
-                            border_color = "#2f9e44"  # 正解（沒選到） → 標出綠框
+                # 邊框顏色
+                border_color = None
+                if chosen:
+                    if chosen == q["filename"] and opt_filename == chosen:
+                        border_color = "#2f9e44"  # 你選到正確
+                    elif chosen == opt_filename and chosen != q["filename"]:
+                        border_color = "#d00000"  # 你選到錯的
+                    elif chosen != opt_filename and opt_filename == q["filename"]:
+                        border_color = "#2f9e44"  # 正解高亮
 
-                    # 顯示該張圖（150x150）
-                    render_img_card(
-                        path=img_path,
-                        size=GRID_SIZE,
-                        border_color=border_color
-                    )
+                render_img_card(img_path, size=GRID_SIZE, border_color=border_color)
 
-                    # 解析文字：僅對「你剛選的那張」顯示
-                    if chosen == opt_filename:
-                        if chosen == q["filename"]:
-                            st.markdown(
-                                "<div style='color:#2f9e44;font-weight:600;'>✔ 正確！</div>",
-                                unsafe_allow_html=True
-                            )
-                        else:
-                            picked_name = filename_to_name.get(chosen, "（未知）")
-                            st.markdown(
-                                f"<div style='color:#d00000;font-weight:600;'>"
-                                f"✘ 答錯<br>此為：{picked_name}"
-                                f"</div>",
-                                unsafe_allow_html=True
-                            )
+                # 解析提示（只對剛選的那張說話）
+                if chosen == opt_filename:
+                    if chosen == q["filename"]:
+                        st.markdown(
+                            "<div style='color:#2f9e44;font-weight:600;'>✔ 正確！</div>",
+                            unsafe_allow_html=True
+                        )
+                    else:
+                        picked_name = filename_to_name.get(chosen, "（未知）")
+                        st.markdown(
+                            f"<div style='color:#d00000;font-weight:600;'>"
+                            f"✘ 答錯<br>此為：{picked_name}"
+                            f"</div>",
+                            unsafe_allow_html=True
+                        )
 
-                            # 記錄錯題（避免重覆同一題同一錯法）
-                            signature = f"mode3-{i}-{chosen}"
-                            already_logged = any(
-                                w.get("sig") == signature
-                                for w in st.session_state.wrong_answers
-                            )
-                            if not already_logged:
-                                st.session_state.wrong_answers.append({
-                                    "sig": signature,
-                                    "question": f"請找出：{q['name']}",
-                                    "correct": q["name"],
-                                    "chosen": chosen,
-                                    "chosen_name": picked_name,
-                                    "img": chosen,  # 把他選錯的那張圖記錄下來
-                                })
+                        signature = f"mode3-{i}-{chosen}"
+                        already_logged = any(
+                            w.get("sig") == signature
+                            for w in st.session_state.wrong_answers
+                        )
+                        if not already_logged:
+                            st.session_state.wrong_answers.append({
+                                "sig": signature,
+                                "question": f"請找出：{q['name']}",
+                                "correct": q["name"],
+                                "chosen": chosen,
+                                "chosen_name": picked_name,
+                                "img": chosen,
+                            })
+
+        # 右欄顯示 opts[2], opts[3]
+        with col_right:
+            for sub_idx in [2, 3]:
+                opt_filename = opts[sub_idx]
+                img_path = os.path.join(IMAGE_DIR, opt_filename)
+
+                btn_key = f"btn_{i}_R_{sub_idx}"
+                if st.button("", key=btn_key, help="點這張圖作答"):
+                    st.session_state[ans_key] = opt_filename
+                    chosen = opt_filename
+
+                border_color = None
+                if chosen:
+                    if chosen == q["filename"] and opt_filename == chosen:
+                        border_color = "#2f9e44"
+                    elif chosen == opt_filename and chosen != q["filename"]:
+                        border_color = "#d00000"
+                    elif chosen != opt_filename and opt_filename == q["filename"]:
+                        border_color = "#2f9e44"
+
+                render_img_card(img_path, size=GRID_SIZE, border_color=border_color)
+
+                if chosen == opt_filename:
+                    if chosen == q["filename"]:
+                        st.markdown(
+                            "<div style='color:#2f9e44;font-weight:600;'>✔ 正確！</div>",
+                            unsafe_allow_html=True
+                        )
+                    else:
+                        picked_name = filename_to_name.get(chosen, "（未知）")
+                        st.markdown(
+                            f"<div style='color:#d00000;font-weight:600;'>"
+                            f"✘ 答錯<br>此為：{picked_name}"
+                            f"</div>",
+                            unsafe_allow_html=True
+                        )
+
+                        signature = f"mode3-{i}-{chosen}"
+                        already_logged = any(
+                            w.get("sig") == signature
+                            for w in st.session_state.wrong_answers
+                        )
+                        if not already_logged:
+                            st.session_state.wrong_answers.append({
+                                "sig": signature,
+                                "question": f"請找出：{q['name']}",
+                                "correct": q["name"],
+                                "chosen": chosen,
+                                "chosen_name": picked_name,
+                                "img": chosen,
+                            })
 
         st.markdown("<hr style='margin:16px 0;' />", unsafe_allow_html=True)
 
-        # 分數 / 進度 累積
+        # 計分
         if chosen is not None:
             done += 1
             if chosen == q["filename"]:
                 score += 1
 
-    # 在整份題目後方顯示 進度+得分
+    # 題組結束後顯示 進度+得分
     progress = done / len(questions) if questions else 0
     st.markdown(
         f"""
@@ -518,3 +560,6 @@ elif st.session_state.mode == "圖片選擇模式（2x2）":
         """,
         unsafe_allow_html=True,
     )
+
+# ===== 目前我們沒有重新顯示「錯題回顧」區塊 =====
+# 但 st.session_state.wrong_answers 仍在收集，可以之後加回來或匯出 CSV。
