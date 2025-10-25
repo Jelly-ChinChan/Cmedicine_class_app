@@ -444,252 +444,166 @@ if mode_is_12:
 
 # ========== 模式3：圖片選擇模式（1x2，手機也橫向） ==========
 elif mode_is_3:
+    import os
+    from PIL import Image, ImageDraw
+
     score = 0
     done = 0
 
-    # ====== 參數設定 ======
-    TILE_SIZE = 160   # 單張候選圖邊長
-    GAP = 8           # 左右圖間隔
-    COMBO_W = TILE_SIZE * 2 + GAP
-    COMBO_H = TILE_SIZE
+    TILE_SIZE = 160
+    GAP = 8
+    TMP_DIR = os.path.join(os.getcwd(), "temp_images")
+    os.makedirs(TMP_DIR, exist_ok=True)
 
-    from PIL import ImageDraw
-
+    # ====== 補充：建立正方形縮圖（保留底部） ======
     def make_square_tile(path):
-        """裁成正方形 TILE_SIZE x TILE_SIZE（保留底部），若失敗給灰塊。"""
-        if os.path.exists(path) and Image is not None:
+        if os.path.exists(path):
             try:
                 im = Image.open(path)
-                tile = crop_square_bottom(im, TILE_SIZE)
-                return tile
+                w, h = im.size
+                side = min(w, h)
+                crop = im.crop((0, h - side, side, h))
+                return crop.resize((TILE_SIZE, TILE_SIZE))
             except Exception:
                 pass
-        return Image.new("RGB", (TILE_SIZE, TILE_SIZE), color=(240, 240, 240))
+        return Image.new("RGB", (TILE_SIZE, TILE_SIZE), color=(230, 230, 230))
 
-    def compose_combo(left_tile, right_tile, highlight_left=None, highlight_right=None):
-        """
-        把左右兩張 tile 拼成一張合成圖 (1x2 橫向)。
-        highlight_left / highlight_right:
-            None      -> 不畫框
-            "correct" -> 綠框
-            "wrong"   -> 紅框
-        """
-        combo = Image.new("RGB", (COMBO_W, COMBO_H), color=(255, 255, 255))
-        combo.paste(left_tile, (0, 0))
-        combo.paste(right_tile, (TILE_SIZE + GAP, 0))
-
-        draw = ImageDraw.Draw(combo)
-
-        def draw_border(x0, y0, size, color_rgb):
-            pad = 4  # 邊框往內縮，避免被裁掉
-            x1 = x0 + size - 1
-            y1 = y0 + size - 1
-            # 疊 3 條 1px 線，視覺≈3px 粗
-            for off in range(3):
-                draw.rectangle(
-                    [x0 + pad + off, y0 + pad + off, x1 - pad - off, y1 - pad - off],
-                    outline=color_rgb,
-                    width=1,
-                )
-
-        # 左格框
-        if highlight_left == "correct":
-            draw_border(0, 0, TILE_SIZE, (47, 158, 68))       # 綠
-        elif highlight_left == "wrong":
-            draw_border(0, 0, TILE_SIZE, (208, 0, 0))         # 紅
-
-        # 右格框
-        if highlight_right == "correct":
-            draw_border(TILE_SIZE + GAP, 0, TILE_SIZE, (47, 158, 68))
-        elif highlight_right == "wrong":
-            draw_border(TILE_SIZE + GAP, 0, TILE_SIZE, (208, 0, 0))
-
-        return combo
-
-    # 全域一次性載入：按鈕列的 flex 版型 CSS
+    # ====== 隱藏 Streamlit header/footer ======
     st.markdown("""
     <style>
-    .answer-row-flex {
+    header {visibility: hidden;}
+    footer {visibility: hidden;}
+    .block-container {padding-top: 1rem;}
+    </style>
+    """, unsafe_allow_html=True)
+
+    # ====== CSS: 讓圖片當按鈕、hover 變化、答對紅綠框 ======
+    st.markdown("""
+    <style>
+    .choice-container {
         display: flex;
-        flex-direction: row;
         justify-content: space-between;
-        align-items: flex-start;
-        max-width: """ + str(COMBO_W) + """px;
-        width: 100%;
-        margin: 8px auto 4px auto;
-        /* 這個容器寬度鎖成跟合成圖一樣大，讓左右按鈕剛好在左右兩張圖的下方 */
+        align-items: center;
+        max-width: 360px;
+        margin: 10px auto;
     }
-    .answer-cell {
+    .choice-form {
         width: 48%;
         text-align: center;
     }
-    .choose-btn {
-        background: #f8f9fa;
-        border: 1px solid #adb5bd;
-        color: #212529;
-        font-size: 0.9rem;
-        line-height: 1.2;
-        border-radius: 6px;
-        padding: 8px 10px;
-        min-width: 100px;
+    .choice-form input[type="image"] {
+        width: 100%;
+        border-radius: 10px;
+        border: 3px solid transparent;
+        transition: 0.2s;
+    }
+    .choice-form input[type="image"]:hover {
+        border-color: #74c69d;
+        box-shadow: 0 0 8px rgba(116,198,157,0.5);
+    }
+    .choice-form.correct input[type="image"] {
+        border-color: #2f9e44;
+        box-shadow: 0 0 6px rgba(47,158,68,0.4);
+    }
+    .choice-form.wrong input[type="image"] {
+        border-color: #d00000;
+        box-shadow: 0 0 6px rgba(208,0,0,0.4);
     }
     </style>
     """, unsafe_allow_html=True)
 
+    # ====== 題目主迴圈 ======
     for i, q in enumerate(questions):
         st.markdown(f"**Q{i+1}. {q['name']}**")
 
-        # 兩個選項（左 / 右）
         opts_files = st.session_state.opts_cache[f"opts_{i}"]
-        left_file = opts_files[0]
-        right_file = opts_files[1]
-
+        left_file, right_file = opts_files
         ans_key = f"ans_{i}"
         chosen = st.session_state.get(ans_key, None)
         correct_file = q["filename"]
 
-        # 準備 tile 圖片
-        left_tile = make_square_tile(os.path.join(IMAGE_DIR, left_file))
-        right_tile = make_square_tile(os.path.join(IMAGE_DIR, right_file))
+        # ====== 製作暫存圖像 ======
+        left_img = make_square_tile(os.path.join(IMAGE_DIR, left_file))
+        right_img = make_square_tile(os.path.join(IMAGE_DIR, right_file))
+        left_tmp = os.path.join(TMP_DIR, f"left_{i}.png")
+        right_tmp = os.path.join(TMP_DIR, f"right_{i}.png")
+        left_img.save(left_tmp)
+        right_img.save(right_tmp)
 
-        # 判斷要畫的紅/綠框
-        highlight_left = None
-        highlight_right = None
-
+        # ====== 判斷要顯示的框色 ======
+        left_class = right_class = "choice-form"
         if chosen:
-            if chosen == left_file:
-                if left_file == correct_file:
-                    highlight_left = "correct"
-                else:
-                    highlight_left = "wrong"
-                    if right_file == correct_file:
-                        highlight_right = "correct"
+            if left_file == correct_file:
+                left_class += " correct"
+            elif chosen == left_file:
+                left_class += " wrong"
+            if right_file == correct_file:
+                right_class += " correct"
             elif chosen == right_file:
-                if right_file == correct_file:
-                    highlight_right = "correct"
-                else:
-                    highlight_right = "wrong"
-                    if left_file == correct_file:
-                        highlight_left = "correct"
-            else:
-                # 非預期 fallback：至少把正解標綠框
-                if left_file == correct_file:
-                    highlight_left = "correct"
-                if right_file == correct_file:
-                    highlight_right = "correct"
+                right_class += " wrong"
 
-        # 合成整張 1x2 圖片 + 邊框
-        combo_img = compose_combo(
-            left_tile,
-            right_tile,
-            highlight_left=highlight_left,
-            highlight_right=highlight_right,
-        )
-        combo_path = f"/tmp/combo_{i}.png"
-        combo_img.save(combo_path)
+        # ====== 用 HTML form 實作圖片按鈕 ======
+        html = f"""
+        <div class="choice-container">
+            <form class="{left_class}" action="" method="post">
+                <button name="choose_left_{i}" style="all:unset;cursor:pointer;">
+                    <img src="file:///{left_tmp.replace("\\\\", "/")}" style="width:100%;border-radius:10px;">
+                </button>
+            </form>
+            <form class="{right_class}" action="" method="post">
+                <button name="choose_right_{i}" style="all:unset;cursor:pointer;">
+                    <img src="file:///{right_tmp.replace("\\\\", "/")}" style="width:100%;border-radius:10px;">
+                </button>
+            </form>
+        </div>
+        """
+        st.markdown(html, unsafe_allow_html=True)
 
-        # 顯示合成圖（保證兩張藥材橫向並列）
-        st.image(combo_path, width=COMBO_W)
-
-        # ====== 並列按鈕（真正的硬核版） ======
-        # 我們會渲染一個 flex row 容器（answer-row-flex）
-        # 在容器內放兩個 form，每個 form 只有一顆 submit button
-        # 這樣兩顆按鈕「一定」在同一排，左按鈕在左圖下、右按鈕在右圖下
-        left_form_key = f"left_form_{i}"
-        right_form_key = f"right_form_{i}"
-
-        # 我們先畫出容器骨架 (兩個 slot)
-        st.markdown(
-            f"""
-            <div class="answer-row-flex">
-                <div class="answer-cell" id="left-slot-{i}">
-                    <!-- left button will appear right after this markdown block -->
-                </div>
-                <div class="answer-cell" id="right-slot-{i}">
-                    <!-- right button will appear right after this markdown block -->
-                </div>
-            </div>
-            """,
-            unsafe_allow_html=True
-        )
-
-        # 左邊按鈕 form
-        with st.form(key=left_form_key):
-            submit_left = st.form_submit_button(
-                "選左邊",
-                help="選左邊的圖片",
-            )
-            if submit_left:
+        # ====== 備用按鈕 (確保 Streamlit 可觸發事件) ======
+        col1, col2 = st.columns(2)
+        with col1:
+            if st.button("選左邊", key=f"left_{i}"):
                 st.session_state[ans_key] = left_file
                 st.rerun()
-
-        # 右邊按鈕 form
-        with st.form(key=right_form_key):
-            submit_right = st.form_submit_button(
-                "選右邊",
-                help="選右邊的圖片",
-            )
-            if submit_right:
+        with col2:
+            if st.button("選右邊", key=f"right_{i}"):
                 st.session_state[ans_key] = right_file
                 st.rerun()
 
-        # ====== 答案解析 / 錯題回顧 ======
+        # ====== 答題回饋 ======
         if chosen:
             if chosen == correct_file:
-                st.markdown(
-                    "<div style='color:#2f9e44;font-weight:600; margin:8px 0;'>"
-                    "✔ 正確！"
-                    "</div>",
-                    unsafe_allow_html=True
-                )
+                st.markdown("<div style='color:#2f9e44;font-weight:600;'>✔ 正確！</div>", unsafe_allow_html=True)
             else:
-                picked_name = filename_to_name.get(chosen, "（未知）")
-                st.markdown(
-                    f"<div style='color:#d00000;font-weight:600; margin:8px 0;'>"
-                    f"✘ 答錯<br>此為：{picked_name}"
-                    f"</div>",
-                    unsafe_allow_html=True
-                )
-
-                # 紀錄錯題
-                signature = f"mode3-{i}-{chosen}"
-                if not any(w.get("sig") == signature for w in st.session_state.wrong_answers):
+                wrong_name = filename_to_name.get(chosen, "（未知）")
+                st.markdown(f"<div style='color:#d00000;font-weight:600;'>✘ 錯誤，此為：{wrong_name}</div>", unsafe_allow_html=True)
+                sig = f"mode3-{i}-{chosen}"
+                if not any(w.get("sig") == sig for w in st.session_state.wrong_answers):
                     st.session_state.wrong_answers.append({
-                        "sig": signature,
+                        "sig": sig,
                         "question": f"請找出：{q['name']}",
                         "correct": q["name"],
                         "chosen": chosen,
-                        "chosen_name": picked_name,
+                        "chosen_name": wrong_name,
                         "img": chosen,
                     })
+        st.markdown("<hr>", unsafe_allow_html=True)
 
-        # 分隔線
-        st.markdown("<hr style='margin:16px 0;' />", unsafe_allow_html=True)
-
-        # 計分
         if chosen is not None:
             done += 1
             if chosen == correct_file:
                 score += 1
 
-    # ====== 頁面底部進度條 ======
+    # ====== 進度條與統計 ======
     progress_ratio = done / len(questions) if questions else 0
-    st.markdown(
-        f"""
-        <div style='margin-top:8px;font-size:0.9rem;'>
-            進度：{done}/{len(questions)}　|　答對：{score}
-        </div>
-        <div style='height:8px;width:100%;background:#e9ecef;border-radius:4px;overflow:hidden;
-                    margin-top:4px;margin-bottom:24px;'>
-            <div style='height:8px;width:{progress_ratio*100}%;background:#74c69d;'></div>
-        </div>
-        """,
-        unsafe_allow_html=True
-    )
-
-    final_score = score
-    final_done = done
-
+    st.markdown(f"""
+    <div style='margin-top:8px;font-size:0.9rem;'>
+        進度：{done}/{len(questions)}　|　答對：{score}
+    </div>
+    <div style='height:8px;width:100%;background:#e9ecef;border-radius:4px;overflow:hidden;margin:6px 0 24px 0;'>
+        <div style='height:8px;width:{progress_ratio*100}%;background:#74c69d;'></div>
+    </div>
+    """, unsafe_allow_html=True)
 
 
 # ========== 重新開始本模式（最底） ==========
