@@ -177,8 +177,28 @@ if st.session_state.mode in ["全部題目", "隨機10題測驗"]:
 # ================= 模式3：圖片選擇（1x2） =================
 elif st.session_state.mode == "圖片選擇模式（1x2）":
     score = done = 0
-    TILE_SIZE, GAP = 140, 8
+
+    # 🔧 圖片放大尺寸
+    TILE_SIZE = 200   # ← 可改 180~200 視你手機螢幕寬度
+    GAP = 8
     COMBO_W = TILE_SIZE * 2 + GAP
+
+    # CSS 調整：圖片外框靠齊兩側
+    st.markdown("""
+    <style>
+    .combo-wrapper {
+        display: flex;
+        justify-content: center;
+        align-items: center;
+        width: 100%;
+        margin: 0 auto;
+    }
+    .stImage img {
+        display: block;
+        margin: 0 auto;
+    }
+    </style>
+    """, unsafe_allow_html=True)
 
     def make_square_tile(path):
         if os.path.exists(path) and Image is not None:
@@ -202,6 +222,7 @@ elif st.session_state.mode == "圖片選擇模式（1x2）":
 
     for i, q in enumerate(questions):
         st.markdown(f"**Q{i+1}. {q['name']}**")
+
         opts = st.session_state.opts_cache[f"opts_{i}"]
         left, right = opts[0], opts[1]
         ans_key = f"ans_{i}"
@@ -223,9 +244,13 @@ elif st.session_state.mode == "圖片選擇模式（1x2）":
         combo = compose_combo(left_tile, right_tile, hl_left, hl_right)
         combo_path = os.path.join(TMP_DIR, f"combo_{i}.png")
         combo.save(combo_path)
-        st.image(combo_path, width=COMBO_W)
 
-        # ✅ 改版：按鈕在圖下方
+        # ✅ 外層加 div 包裝，讓圖片整體靠齊按鈕區
+        st.markdown("<div class='combo-wrapper'>", unsafe_allow_html=True)
+        st.image(combo_path, width=COMBO_W)
+        st.markdown("</div>", unsafe_allow_html=True)
+
+        # ✅ 改用 columns，讓左右按鈕正好對齊
         col1, col2 = st.columns(2)
         with col1:
             if st.button("選左邊", key=f"left_{i}", use_container_width=True):
@@ -236,7 +261,7 @@ elif st.session_state.mode == "圖片選擇模式（1x2）":
                 st.session_state[ans_key] = right
                 st.rerun()
 
-        # 回饋
+        # 回饋區
         if chosen:
             if chosen == correct:
                 st.markdown("<div class='opt-result-correct'>✔ 正確！</div>", unsafe_allow_html=True)
