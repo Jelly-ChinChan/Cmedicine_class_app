@@ -567,7 +567,7 @@ elif mode_is_3:
 
         # ====== 放兩顆按鈕：左 / 空白 / 右 ======
         # 我們使用三欄，讓右按鈕真的靠右
-        btn_left_col, spacer_col, btn_right_col = st.columns([1, 0.5, 1])
+        btn_left_col, spacer_col, btn_right_col = st.columns([1, 0.02, 1])
 
         with btn_left_col:
             if st.button("選左邊", key=f"left_{i}"):
