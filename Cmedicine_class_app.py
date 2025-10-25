@@ -8,12 +8,11 @@
 #   - 即時記錄學生的錯誤作答
 #   - 頁面最底部顯示「錯題回顧」區塊，包含正解、學生選錯的名稱、參考圖
 #
-# 2025-10-25 更新：
-#   1. 移除對 sidebar 的依賴：模式選擇改到主畫面頂端（手機也看得到）
-#   2. 畫面上方顯示目前模式 + 🔄重新開始本模式 按鈕
-#   3. 成績卡片加入清楚的大字 summary（本次得分 / 正確率）
-#   4. 頁面最底部的「錯題回顧」區塊
-#   5. 模式3改成「1x2 橫向並排、兩選一」，圖片本身就是按鈕
+# 2025-10-25 本版調整：
+#   - 拿掉成績卡片，不再顯示「本次得分/百分比」白色大卡
+#   - 恢復為「進度條 + 答對題數」的簡潔統計
+#   - 「🔄 重新開始本模式」按鈕移到頁面最下方
+#   - 隱藏頁面最上方的 Fork / header / menu，與最下方的 "Made with Streamlit"
 
 import streamlit as st
 import pandas as pd
@@ -40,7 +39,7 @@ IMAGE_DIR = "photos"
 FIXED_SIZE = 300          # 模式1/2 題目圖大小
 PAIR_SIZE = 200           # 模式3 (1x2) 的圖片大小
 NUM_OPTIONS_MODE12 = 4    # 模式1/2 每題4個藥名選項
-NUM_OPTIONS_MODE3 = 2     # 模式3 每題2張圖(2選1)
+NUM_OPTIONS_MODE3 = 2     # 模式3 兩張圖(2選1)
 DEFAULT_MODE = "全部題目"
 
 st.set_page_config(
@@ -49,10 +48,24 @@ st.set_page_config(
     layout="centered",
 )
 
-# ====== CSS：卡片樣式、間距、模式badge ======
+# ====== CSS：整體美化 + 隱藏 Streamlit header/footer ======
 st.markdown(
     """
     <style>
+    /* 🔒 隱藏 Streamlit 頂部的header、右上角的menu、"Deploy/Fork"等 */
+    header[data-testid="stHeader"] {display: none !important;}
+    [data-testid="stToolbar"] {display: none !important;}
+    footer {display: none !important;}
+    div[data-testid="stStatusWidget"] {display:none !important;}
+
+    /* 也常藏不掉的 bottom 'Made with Streamlit' 容器 */
+    .viewerBadge_container__1QSob,
+    .viewerBadge_container__1QSob iframe,
+    .stAppDeployButton,
+    .stAppToolbar {
+        display: none !important;
+    }
+
     /* 圖片卡片陰影/圓角 */
     .img-card {
         display: inline-block;
@@ -62,7 +75,7 @@ st.markdown(
         margin-bottom: 0.25rem;
     }
 
-    /* 模式標籤+重置區塊外觀 */
+    /* 模式標籤外觀 */
     .mode-banner {
         background:#f1f3f5;
         border:1px solid #dee2e6;
@@ -208,12 +221,16 @@ def build_options(correct, pool, k):
     distractors = [p for p in pool if p != correct]
     random.shuffle(distractors)
     opts = distractors[: max(0, k - 1)] + [correct]
-    # 確保長度足夠；若資料太少就用全體再洗
-    opts = list(dict.fromkeys(opts))  # 保留順序同時去重
+
+    # 去重，同時保留順序
+    opts = list(dict.fromkeys(opts))
+
+    # 如果資料太少就補
     while len(opts) < k and len(distractors) > 0:
         extra = distractors.pop()
         if extra not in opts:
             opts.append(extra)
+
     random.shuffle(opts)
     return opts[:k]
 
@@ -256,7 +273,7 @@ if "questions" not in st.session_state:
 if "wrong_answers" not in st.session_state:
     st.session_state.wrong_answers = []
 
-# 顯示模式選擇的 radio（主畫面）
+# 模式選擇 radio（主畫面）
 st.markdown("#### 🌿 模式選擇")
 selected_mode = st.radio(
     "請選擇測驗模式",
@@ -265,7 +282,7 @@ selected_mode = st.radio(
     horizontal=False,
 )
 
-# 如果radio選的模式不同，重新初始化
+# 如果 radio 選擇不同模式 → 重新初始化
 if selected_mode != st.session_state.mode:
     init_mode(bank, selected_mode)
 
@@ -292,29 +309,24 @@ for i, q in enumerate(questions):
                 k=NUM_OPTIONS_MODE3
             )
 
-# ================== 頂部模式標籤 + 重置按鈕 ==================
-col_banner_l, col_banner_r = st.columns([4,1])
-with col_banner_l:
-    st.markdown(
-        f"""
-        <div class="mode-banner">
-            <div class="mode-label">目前模式：{st.session_state.mode}</div>
-        </div>
-        """,
-        unsafe_allow_html=True
-    )
+# ================== 頂部模式標籤 ==================
+st.markdown(
+    f"""
+    <div class="mode-banner">
+        <div class="mode-label">目前模式：{st.session_state.mode}</div>
+    </div>
+    """,
+    unsafe_allow_html=True
+)
 
-with col_banner_r:
-    if st.button("🔄 重新開始本模式"):
-        init_mode(bank, st.session_state.mode)
-        st.rerun()
-
-# ========== 模式1&2：看圖選藥名 (radio) ==========
-final_score = 0
-final_done = 0
+# ========== 判斷是哪一種模式 ==========
 mode_is_12 = (st.session_state.mode in ["全部題目", "隨機10題測驗"])
 mode_is_3 = (st.session_state.mode == "圖片選擇模式（1x2）")
 
+final_score = 0
+final_done = 0
+
+# ========== 模式1&2：看圖選藥名 (radio) ==========
 if mode_is_12:
     score = 0
     done = 0
@@ -371,39 +383,23 @@ if mode_is_12:
 
         st.markdown("<hr style='margin:20px 0;' />", unsafe_allow_html=True)
 
-    # 成績卡片 summary
-    progress = done / len(questions) if questions else 0
-    percent = (score / len(questions) * 100) if questions else 0
-
+    # ==== 回到舊版的簡潔統計：進度條 + 答對題數 ====
+    progress_ratio = done / len(questions) if questions else 0
     st.markdown(
         f"""
-        <div style='border-radius:12px;
-                    box-shadow:0 2px 6px rgba(0,0,0,0.05);
-                    padding:16px;
-                    background:#fff;
-                    border:1px solid #eee;
-                    margin-top:24px;'>
-
-            <div style='font-size:1.1rem;
-                        font-weight:600;
-                        margin-bottom:6px;'>
-                本次得分：{score} / {len(questions)}　
-                ({percent:.0f}%)
-            </div>
-
-            <b>進度</b>：{done}/{len(questions)}（{progress*100:.0f}%）　
-            <b>得分</b>：{score}
-
+        <div style='margin-top:8px; font-size:0.9rem;'>
+            進度：{done}/{len(questions)}　|　答對：{score}
+        </div>
+        <div style='height:8px;
+                    width:100%;
+                    background:#e9ecef;
+                    border-radius:4px;
+                    overflow:hidden;
+                    margin-top:4px;
+                    margin-bottom:24px;'>
             <div style='height:8px;
-                        width:100%;
-                        background:#e9ecef;
-                        border-radius:4px;
-                        overflow:hidden;
-                        margin-top:8px;'>
-                <div style='height:8px;
-                            width:{progress*100}% ;
-                            background:#74c69d;'>
-                </div>
+                        width:{progress_ratio*100}%;
+                        background:#74c69d;'>
             </div>
         </div>
         """,
@@ -507,7 +503,7 @@ elif mode_is_3:
                         st.session_state[ans_key] = opt_filename
                         chosen = opt_filename  # 即時更新
 
-                # 只對剛點到的那張圖顯示解析
+                # 即時解析（只對剛點到的那張圖顯示）
                 if chosen == opt_filename:
                     if chosen == q["filename"]:
                         st.markdown(
@@ -544,39 +540,23 @@ elif mode_is_3:
             if chosen == q["filename"]:
                 score += 1
 
-    # 成績卡片 summary
-    progress = done / len(questions) if questions else 0
-    percent = (score / len(questions) * 100) if questions else 0
-
+    # ==== 簡潔統計：進度條 + 答對題數 ====
+    progress_ratio = done / len(questions) if questions else 0
     st.markdown(
         f"""
-        <div style='border-radius:12px;
-                    box-shadow:0 2px 6px rgba(0,0,0,0.05);
-                    padding:16px;
-                    background:#fff;
-                    border:1px solid #eee;
-                    margin-top:24px;'>
-
-            <div style='font-size:1.1rem;
-                        font-weight:600;
-                        margin-bottom:6px;'>
-                本次得分：{score} / {len(questions)}　
-                ({percent:.0f}%)
-            </div>
-
-            <b>進度</b>：{done}/{len(questions)}（{progress*100:.0f}%）　
-            <b>得分</b>：{score}
-
+        <div style='margin-top:8px; font-size:0.9rem;'>
+            進度：{done}/{len(questions)}　|　答對：{score}
+        </div>
+        <div style='height:8px;
+                    width:100%;
+                    background:#e9ecef;
+                    border-radius:4px;
+                    overflow:hidden;
+                    margin-top:4px;
+                    margin-bottom:24px;'>
             <div style='height:8px;
-                        width:100%;
-                        background:#e9ecef;
-                        border-radius:4px;
-                        overflow:hidden;
-                        margin-top:8px;'>
-                <div style='height:8px;
-                            width:{progress*100}% ;
-                            background:#74c69d;'>
-                </div>
+                        width:{progress_ratio*100}%;
+                        background:#74c69d;'>
             </div>
         </div>
         """,
@@ -585,3 +565,16 @@ elif mode_is_3:
 
     final_score = score
     final_done = done
+
+
+# ========== 重新開始本模式（移到最下方） ==========
+st.markdown("---")
+if st.button("🔄 重新開始本模式"):
+    init_mode(bank, st.session_state.mode)
+    st.rerun()
+
+
+# ========== 錯題回顧（保留原本邏輯，若你之後要放可在此加） ==========
+# 目前我們只是保留 session_state.wrong_answers 的累積資料
+# 你的後續 UI (例如列出錯題清單、正解 vs 學生選錯) 可以繼續往下做
+# 這裡先不主動渲染，如果你要顯示，就在這裡 for-loop st.session_state.wrong_answers。
