@@ -447,103 +447,67 @@ elif mode_is_3:
     score = 0
     done = 0
 
-    # ===== 造型：框線＋按鈕寬度描述 =====
-    st.markdown("""
-    <style>
-    .option-wrapper {
-        display: inline-block;
-        border: 3px solid transparent;
-        border-radius: 8px;
-        padding: 0;
-        margin-bottom: 4px;
-    }
-    .option-wrapper.correct {
-        border-color: #2f9e44;
-    }
-    .option-wrapper.wrong {
-        border-color: #d00000;
-    }
-    div.stButton > button {
-        background: #f1f3f5 !important;
-        border: 1px solid #adb5bd !important;
-        color: #212529 !important;
-        font-size: 0.8rem !important;
-        line-height: 1.2 !important;
-        border-radius: 6px !important;
-        padding: 4px 6px !important;
-        margin: 0 auto 12px auto !important;
-        width: 110px !important;
-        min-height: 0 !important;
-        height: auto !important;
-        box-shadow: none !important;
-        display: block !important;
-    }
-    </style>
-    """, unsafe_allow_html=True)
+    # 小方圖邊長
+    TILE_SIZE = 110      # 單一選項的正方形邊長
+    GAP = 8              # 左右兩格之間的間距 (px)
+    COMBO_W = TILE_SIZE * 2 + GAP
+    COMBO_H = TILE_SIZE
 
     for i, q in enumerate(questions):
         st.markdown(f"**Q{i+1}. {q['name']}**")
 
-        opts_files = st.session_state.opts_cache[f"opts_{i}"]  # 兩個檔名
+        opts_files = st.session_state.opts_cache[f"opts_{i}"]  # [左圖檔名, 右圖檔名]
         ans_key = f"ans_{i}"
         chosen = st.session_state.get(ans_key, None)
 
-        # 我們準備兩個選項（上、下）
-        option_data = []
-        for opt_idx, opt_file in enumerate(opts_files):
-            img_path = os.path.join(IMAGE_DIR, opt_file)
+        # --- 1. 先把兩張原圖裁成正方 TILE_SIZE x TILE_SIZE (保留底部) ---
+        left_file = opts_files[0]
+        right_file = opts_files[1]
 
-            # 先裁成正方形 110x110，保留底部，再存成暫存檔
-            disp_path = img_path
-            if os.path.exists(img_path) and Image is not None:
+        left_img_path = os.path.join(IMAGE_DIR, left_file)
+        right_img_path = os.path.join(IMAGE_DIR, right_file)
+
+        def make_square_tile(path):
+            if os.path.exists(path) and Image is not None:
                 try:
-                    img_obj = Image.open(img_path)
-                    square_img = crop_square_bottom(img_obj, 110)
-                    tmp_name = f"/tmp/mode3_{i}_{opt_idx}.png"
-                    square_img.save(tmp_name)
-                    disp_path = tmp_name
+                    im = Image.open(path)
+                    tile = crop_square_bottom(im, TILE_SIZE)  # 這個你已經有了
+                    return tile
                 except Exception:
                     pass
+            # fallback：萬一讀圖失敗就給一張灰色空白
+            fallback = Image.new("RGB", (TILE_SIZE, TILE_SIZE), color=(240,240,240))
+            return fallback
 
-            # 框線狀態
-            frame_class = "option-wrapper"
-            if chosen:
-                if chosen == q["filename"] and opt_file == chosen:
-                    frame_class = "option-wrapper correct"
-                elif chosen == opt_file and chosen != q["filename"]:
-                    frame_class = "option-wrapper wrong"
-                elif chosen != opt_file and opt_file == q["filename"]:
-                    frame_class = "option-wrapper correct"
+        left_tile = make_square_tile(left_img_path)
+        right_tile = make_square_tile(right_img_path)
 
-            option_data.append({
-                "file": opt_file,
-                "disp": disp_path,
-                "frame_class": frame_class,
-                "btn_key": f"optbtn_{i}_{opt_idx}",
-            })
+        # --- 2. 拼成一張左右並排的大圖 (COMBO_W x COMBO_H) ---
+        combo = Image.new("RGB", (COMBO_W, COMBO_H), color=(255,255,255))
+        combo.paste(left_tile, (0,0))
+        combo.paste(right_tile, (TILE_SIZE + GAP, 0))
 
-        # 逐一顯示（直式二選一）
-        for opt in option_data:
-            # 外框（顯示紅/綠/透明）
-            st.markdown(
-                f"<div class='{opt['frame_class']}'>",
-                unsafe_allow_html=True
-            )
+        # 把合成結果存到 /tmp 以便 st.image 顯示
+        combo_path = f"/tmp/combo_{i}.png"
+        combo.save(combo_path)
 
-            # 圖片用官方 st.image() 呈現，避免 HTML <img file://...> 被擋
-            if os.path.exists(opt["disp"]):
-                st.image(opt["disp"], width=110)
-            else:
-                st.image(os.path.join(IMAGE_DIR, opt["file"]), width=110)
+        # --- 3. 顯示合成圖片（學生看起來是兩張並列，手機不會再拆行） ---
+        st.image(combo_path, width=COMBO_W)
 
-            st.markdown("</div>", unsafe_allow_html=True)
+        # --- 4. 下面放兩個選擇按鈕：左 / 右 ---
+        btn_left_col, btn_right_col = st.columns(2)
 
-            # 「選這張」按鈕（寬度 = 110px）
-            if st.button("選這張", key=opt["btn_key"]):
-                st.session_state[ans_key] = opt["file"]
+        with btn_left_col:
+            if st.button("選左邊", key=f"left_{i}"):
+                st.session_state[ans_key] = left_file
                 st.rerun()
 
-        # 答題後顯示解析
+        with btn_right_col:
+            if st.button("選右邊", key=f"right_{i}"):
+                st.session_state[ans_key] = right_file
+                st.rerun()
+
+        # --- 5. 答案解析 / 計分 ---
         if chosen:
             if chosen == q["filename"]:
                 st.markdown(
@@ -559,7 +523,7 @@ elif mode_is_3:
                     unsafe_allow_html=True
                 )
 
-                # 紀錄錯題
+                # 記錄錯題
                 signature = f"mode3-{i}-{chosen}"
                 if not any(w.get("sig") == signature for w in st.session_state.wrong_answers):
                     st.session_state.wrong_answers.append({
@@ -579,7 +543,7 @@ elif mode_is_3:
             if chosen == q["filename"]:
                 score += 1
 
-    # 底部進度條
+    # --- 6. 最下面進度條 & 成績摘要 ---
     progress_ratio = done / len(questions) if questions else 0
     st.markdown(
         f"""
