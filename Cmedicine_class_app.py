@@ -447,31 +447,39 @@ elif mode_is_3:
     score = 0
     done = 0
 
-    # CSS：兩張卡片並排置中 + 小間距 + 框線 + 小按鈕貼底
+    # ====== 全域樣式：row橫排、卡片固定寬、按鈕縮到圖片寬 ======
     st.markdown("""
     <style>
-    /* 控制整個兩欄區塊的行為 */
-    div[data-testid="stHorizontalBlock"] {
-        flex-wrap: nowrap !important;
-        justify-content: center !important;
-        gap: 8px !important;
+    /* 外層一題的整個選項列：左右兩個卡片橫向並排、置中、gap縮小 */
+    .choice-row {
+        width: 100%;
+        display: flex;
+        flex-direction: row;
+        justify-content: center;
+        align-items: flex-start;
+        gap: 8px;
+        flex-wrap: nowrap;
+        margin: 0 0 8px 0;
+        padding: 0;
     }
 
-    /* 每一欄限制最大寬度，避免它吃滿手機整寬 */
-    div[data-testid="column"] {
-        max-width: 140px !important;
-        flex: 0 0 auto !important;
-        padding-left: 4px !important;
-        padding-right: 4px !important;
+    /* 單一卡片（圖片+按鈕） */
+    .choice-card {
+        width: 120px;           /* 卡片固定寬，手機也塞得下兩張 */
+        max-width: 120px;
+        text-align: center;
+        margin: 0;
+        padding: 0;
     }
 
-    /* 框外觀，預設透明，答後變綠/紅 */
+    /* 外框（正/誤用顏色，預設透明） */
     .img-frame-box {
-        display: inline-block;
         border: 3px solid transparent;
         border-radius: 8px;
         padding: 0;
-        margin: 0;
+        margin: 0 auto 4px auto;
+        width: 110px;
+        max-width: 110px;
     }
     .img-frame-box.correct {
         border-color: #2f9e44;
@@ -480,18 +488,31 @@ elif mode_is_3:
         border-color: #d00000;
     }
 
-    /* 把按鈕本體變成只是一個點擊區，不要大灰塊 */
-    div.stButton > button {
-        background:none !important;
-        border:none !important;
-        padding:4px 0 !important;
-        margin:0 !important;
-        box-shadow:none !important;
-        border-radius:0 !important;
-        min-height:0 !important;
-        height:auto !important;
-        line-height:1 !important;
-        color:transparent !important;
+    /* 圖片本體（正方形 110x110） */
+    .choice-img {
+        display: block;
+        width: 110px;
+        height: 110px;
+        border-radius: 8px;
+        object-fit: cover;
+    }
+
+    /* 把 st.button 本體扁平化，並限制寬度不要超過圖片寬 */
+    .answer-btn-wrapper > button {
+        background: #f1f3f5 !important;
+        border: 1px solid #adb5bd !important;
+        color: #212529 !important;
+        font-size: 0.8rem !important;
+        line-height: 1.2 !important;
+        border-radius: 6px !important;
+        padding: 4px 6px !important;
+        margin: 0 auto !important;
+        min-height: 0 !important;
+        height: auto !important;
+        box-shadow: none !important;
+        display: block !important;
+        width: 110px !important;      /* 跟圖片同寬 */
+        max-width: 110px !important;
     }
     </style>
     """, unsafe_allow_html=True)
@@ -499,15 +520,16 @@ elif mode_is_3:
     for i, q in enumerate(questions):
         st.markdown(f"**Q{i+1}. {q['name']}**")
 
-        opts_files = st.session_state.opts_cache[f"opts_{i}"]  # 兩個檔名
+        opts_files = st.session_state.opts_cache[f"opts_{i}"]  # 應該有2個檔名
         ans_key = f"ans_{i}"
         chosen = st.session_state.get(ans_key, None)
 
-        # --- 準備兩張正方形小圖 (110x110)，外加框色狀態 ---
-        processed = []
-        for opt_file in opts_files:
+        # 我們先把兩個選項的資料準備好（裁圖、框色、暫存路徑）
+        cards = []
+        for opt_idx, opt_file in enumerate(opts_files):
             img_path = os.path.join(IMAGE_DIR, opt_file)
 
+            # 框的狀態（correct / wrong / none）
             frame_class = "img-frame-box"
             if chosen:
                 if chosen == q["filename"] and opt_file == chosen:
@@ -517,63 +539,129 @@ elif mode_is_3:
                 elif chosen != opt_file and opt_file == q["filename"]:
                     frame_class = "img-frame-box correct"
 
-            # 產生暫存正方形圖
-            disp_path = img_path
+            # 把原圖裁成正方形110x110並存暫存檔
+            disp_path = img_path  # fallback
             if os.path.exists(img_path) and Image is not None:
                 try:
                     img_obj = Image.open(img_path)
-                    square = crop_square_bottom(img_obj, 110)  # 裁成 110x110，保留底部
-                    disp_path = f"/tmp/{i}_{opt_file.replace('/', '_')}_110.png"
-                    square.save(disp_path, format="PNG")
+                    square_img = crop_square_bottom(img_obj, 110)  # 110x110, 保留底部
+                    tmp_name = f"/tmp/{i}_{opt_idx}_{opt_file.replace('/', '_')}_110.png"
+                    square_img.save(tmp_name, format="PNG")
+                    disp_path = tmp_name
                 except Exception:
                     pass
 
-            processed.append({
-                "file": opt_file,
-                "disp": disp_path,
+            cards.append({
+                "file": opt_file,         # 這個是用來記答案
+                "disp_path": disp_path,   # 這個是顯示用的縮圖
                 "frame_class": frame_class,
+                "btn_key": f"btn_{i}_{opt_idx}",
             })
 
-        # --- 建兩欄，並把它們置中顯示 ---
-        col_left, col_right = st.columns([1,1])
+        # ------- 顯示兩張卡片（橫向一排） -------
+        # 我們自己產出 HTML 的框 + <img>，不靠 columns。
+        # 注意：這裡只做"外觀列"。真正的按鈕會在下面各自 render。
+        row_html_parts = []
+        for card in cards:
+            # 圖片路徑要用 file:// 或絕對路徑都可以被顯示
+            img_src = f"file://{card['disp_path']}" if not card['disp_path'].startswith("file://") else card['disp_path']
 
-        # 左選項
-        with col_left:
-            left_info = processed[0]
-            st.markdown(f"<div class='{left_info['frame_class']}'>", unsafe_allow_html=True)
-            if os.path.exists(left_info["disp"]):
-                st.image(left_info["disp"], width=110)
-            else:
-                st.image(os.path.join(IMAGE_DIR, left_info["file"]), width=110)
-            st.markdown("</div>", unsafe_allow_html=True)
+            block_html = f"""
+            <div class="choice-card">
+                <div class="{card['frame_class']}">
+                    <img class="choice-img" src="{img_src}">
+                </div>
+            </div>
+            """
+            row_html_parts.append(block_html)
 
-            clicked_left = st.button(
-                " ",  # label 空白
-                key=f"btn_left_{i}",
-            )
-            if clicked_left:
-                st.session_state[ans_key] = left_info["file"]
-                st.rerun()
+        row_html = "<div class='choice-row'>" + "".join(row_html_parts) + "</div>"
+        st.markdown(row_html, unsafe_allow_html=True)
 
-        # 右選項
-        with col_right:
-            right_info = processed[1]
-            st.markdown(f"<div class='{right_info['frame_class']}'>", unsafe_allow_html=True)
-            if os.path.exists(right_info["disp"]):
-                st.image(right_info["disp"], width=110)
-            else:
-                st.image(os.path.join(IMAGE_DIR, right_info["file"]), width=110)
-            st.markdown("</div>", unsafe_allow_html=True)
+        # ------- 下方放兩個按鈕（各自對應左卡/右卡） -------
+        # 我們用兩欄來把兩顆按鈕擺成一排，並套上 .answer-btn-wrapper 讓按鈕寬度 = 圖寬
+        btn_col_left, btn_col_right = st.columns([1,1])
 
-            clicked_right = st.button(
-                " ",
-                key=f"btn_right_{i}",
-            )
-            if clicked_right:
-                st.session_state[ans_key] = right_info["file"]
-                st.rerun()
+        # 左按鈕
+        with btn_col_left:
+            with st.container():
+                st.markdown("<div style='display:flex;justify-content:center;'>", unsafe_allow_html=True)
+                with st.container():
+                    clicked_left = st.button(
+                        "選這張",
+                        key=cards[0]["btn_key"],
+                    )
+                st.markdown("</div>", unsafe_allow_html=True)
 
-        # === 解析區 ===
+                # 動態寫入class，讓這顆按鈕用我們的寬度樣式
+                st.markdown(
+                    f"""
+                    <style>
+                    div[data-testid="stButton"] button#{cards[0]["btn_key"]} {{
+                        background: #f1f3f5 !important;
+                        border: 1px solid #adb5bd !important;
+                        color: #212529 !important;
+                        font-size: 0.8rem !important;
+                        line-height: 1.2 !important;
+                        border-radius: 6px !important;
+                        padding: 4px 6px !important;
+                        margin: 0 auto !important;
+                        min-height: 0 !important;
+                        height: auto !important;
+                        box-shadow: none !important;
+                        display: block !important;
+                        width: 110px !important;
+                        max-width: 110px !important;
+                    }}
+                    </style>
+                    """,
+                    unsafe_allow_html=True
+                )
+
+                if clicked_left:
+                    st.session_state[ans_key] = cards[0]["file"]
+                    st.rerun()
+
+        # 右按鈕
+        with btn_col_right:
+            with st.container():
+                st.markdown("<div style='display:flex;justify-content:center;'>", unsafe_allow_html=True)
+                with st.container():
+                    clicked_right = st.button(
+                        "選這張",
+                        key=cards[1]["btn_key"],
+                    )
+                st.markdown("</div>", unsafe_allow_html=True)
+
+                st.markdown(
+                    f"""
+                    <style>
+                    div[data-testid="stButton"] button#{cards[1]["btn_key"]} {{
+                        background: #f1f3f5 !important;
+                        border: 1px solid #adb5bd !important;
+                        color: #212529 !important;
+                        font-size: 0.8rem !important;
+                        line-height: 1.2 !important;
+                        border-radius: 6px !important;
+                        padding: 4px 6px !important;
+                        margin: 0 auto !important;
+                        min-height: 0 !important;
+                        height: auto !important;
+                        box-shadow: none !important;
+                        display: block !important;
+                        width: 110px !important;
+                        max-width: 110px !important;
+                    }}
+                    </style>
+                    """,
+                    unsafe_allow_html=True
+                )
+
+                if clicked_right:
+                    st.session_state[ans_key] = cards[1]["file"]
+                    st.rerun()
+
+        # ------- 題目解析 / 正誤提示 -------
         if chosen:
             if chosen == q["filename"]:
                 st.markdown(
@@ -587,7 +675,6 @@ elif mode_is_3:
                     unsafe_allow_html=True
                 )
 
-                # 錯題紀錄
                 signature = f"mode3-{i}-{chosen}"
                 already_logged = any(w.get("sig") == signature for w in st.session_state.wrong_answers)
                 if not already_logged:
@@ -602,13 +689,13 @@ elif mode_is_3:
 
         st.markdown("<hr style='margin:16px 0;' />", unsafe_allow_html=True)
 
-        # 計分統計
+        # 記錄作答進度 / 計分
         if chosen is not None:
             done += 1
             if chosen == q["filename"]:
                 score += 1
 
-    # 進度條
+    # ====== 最下面的進度條 ======
     progress_ratio = done / len(questions) if questions else 0
     st.markdown(
         f"""
@@ -625,7 +712,6 @@ elif mode_is_3:
 
     final_score = score
     final_done = done
-
 
 
 # ========== 重新開始本模式（最底） ==========
