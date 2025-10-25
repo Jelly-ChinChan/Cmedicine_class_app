@@ -10,8 +10,7 @@
 #   - 頁面最底部顯示「錯題回顧」清單
 #   - 可隨時重新開始本模式（重抽題）
 #
-# 2025-10-25 consolidated build
-
+# 2025-10-25 consolidated build (fixed mode_is_3 NameError + added 回顧 render)
 
 import streamlit as st
 import pandas as pd
@@ -153,7 +152,6 @@ def load_question_bank():
 
     return bank
 
-
 # ================= 影像工具：模式1/2用 =================
 def crop_square_bottom(img, size=300):
     """
@@ -221,7 +219,6 @@ def render_img_card(path, size=300, border_color=None):
         unsafe_allow_html=True
     )
 
-
 # ================= 出題輔助 =================
 def build_options(correct, pool, k=4):
     """
@@ -236,7 +233,6 @@ def build_options(correct, pool, k=4):
     opts = list(dict.fromkeys(opts))
     random.shuffle(opts)
     return opts
-
 
 def init_mode(bank, mode):
     """
@@ -263,7 +259,6 @@ def init_mode(bank, mode):
 
     # 重置錯題回顧
     st.session_state.wrong_answers = []
-
 
 # ================= 啟動 state =================
 bank = load_question_bank()
@@ -302,10 +297,9 @@ for i, q in enumerate(questions):
                 q["name"], all_names, k=NUM_OPTIONS
             )
         else:
-            # 模式3：兩圖一題，先用4個檔名抽，前兩個檔名當左右
+            # 模式3：兩圖一題，抽兩個檔名
             all_files = [x["filename"] for x in bank]
             cand_files = build_options(q["filename"], all_files, k=2)
-            # 保底：確保一定有2個，如果不夠就重補
             while len(cand_files) < 2:
                 extra = random.choice(all_files)
                 if extra not in cand_files:
@@ -321,7 +315,6 @@ st.markdown(
     """,
     unsafe_allow_html=True
 )
-
 
 # ======================================================
 # 模式1 & 模式2：看圖選藥名 / radio
@@ -367,7 +360,7 @@ if st.session_state.mode in ["全部題目", "隨機10題測驗"]:
                     unsafe_allow_html=True,
                 )
 
-                # 紀錄錯題 (避免重複塞)
+                # 紀錄錯題
                 signature = f"mode12-{i}-{chosen}"
                 if not any(w.get("sig") == signature for w in st.session_state.wrong_answers):
                     st.session_state.wrong_answers.append({
@@ -397,231 +390,262 @@ if st.session_state.mode in ["全部題目", "隨機10題測驗"]:
         unsafe_allow_html=True
     )
 
-
 # ======================================================
 # 模式3：圖片選擇模式（1x2）
-# 兩張圖並排；各自有一顆按鈕；按下即作答；答後呈現紅/綠框
 # ======================================================
 elif st.session_state.mode == "圖片選擇模式（1x2）":
-
-    # ========================
-    # 模式3：圖片選擇模式（1x2）
-    # ========================
-    # 手機/電腦顯示兩張圖並排 (左邊/右邊)
-    # 學生按「選左邊」或「選右邊」作答
-    # 作答後：即時顯示紅/綠框 + 解析
-    # 並且把錯題記錄到 st.session_state.wrong_answers
-
-    # --- 參數 ---
-    TILE_SIZE = 160  # 單張圖片邊長（正方形顯示大小）
-
-    # --- 確保有暫存資料夾可存加工後的小圖（跨平台：Windows / Mac / Streamlit Cloud 都可以） ---
-    TMP_DIR = os.path.join(os.getcwd(), "temp_images")
-    os.makedirs(TMP_DIR, exist_ok=True)
-
-    # --- 圖片處理工具 ---
-    def make_square_tile(path):
-        """
-        讀入原始中藥圖，裁成正方形並縮到 TILE_SIZE x TILE_SIZE。
-        規則：以底部為基準裁切(保留下面的外觀特徵)，在辨認乾燥藥材時比較直覺。
-        若無法讀圖，回傳灰色方塊。
-        """
-        if os.path.exists(path) and Image is not None:
-            try:
-                im = Image.open(path)
-                w, h = im.size
-                side = min(w, h)
-                # 從底往上切，使底部保留
-                crop = im.crop((0, h - side, side, h))
-                return crop.resize((TILE_SIZE, TILE_SIZE))
-            except Exception:
-                pass
-
-        # fallback: 回傳灰色方塊（避免整頁炸掉）
-        return Image.new("RGB", (TILE_SIZE, TILE_SIZE), color=(230, 230, 230))
-
-    def draw_border(tile_img, status):
-        """
-        在 tile_img 外圍畫紅或綠框，回傳新影像。
-        status:
-          None       -> 不畫框
-          "correct"  -> 綠框
-          "wrong"    -> 紅框
-        """
-        out = tile_img.copy()
-        if status is None:
-            return out
-
-        draw = ImageDraw.Draw(out)
-        color = (47, 158, 68) if status == "correct" else (208, 0, 0)  # 綠 or 紅
-        pad = 4
-        x0, y0 = pad, pad
-        x1, y1 = TILE_SIZE - pad - 1, TILE_SIZE - pad - 1
-
-        # 疊3層 1px 線，看起來像粗框
-        for off in range(3):
-            draw.rectangle(
-                [x0 + off, y0 + off, x1 - off, y1 - off],
-                outline=color,
-                width=1,
-            )
-        return out
-
-    # --- 分數/進度統計 ---
     score = 0
     done = 0
 
-    # === 問題迴圈：逐題顯示 ===
+    # 覆寫局部顯示參數
+    TILE_SIZE = 140
+    GAP = 8
+    COMBO_W = TILE_SIZE * 2 + GAP
+    COMBO_H = TILE_SIZE
+
+    # 補一層 CSS：兩顆按鈕水平佈局 & 限寬
+    st.markdown("""
+    <style>
+    .answer-row {
+        width: 100%;
+        display: flex;
+        flex-direction: row;
+        justify-content: center;
+        align-items: flex-start;
+        gap: 8px;
+        margin-top: 8px;
+        margin-bottom: 8px;
+    }
+    .choice-btn-slot {
+        width: 140px;
+        max-width: 140px;
+        text-align: center;
+        display: flex;
+        flex-direction: column;
+        align-items: center;
+    }
+    div.stButton > button {
+        background: #f8f9fa !important;
+        border: 1px solid #adb5bd !important;
+        color: #212529 !important;
+        font-size: 0.9rem !important;
+        line-height: 1.2 !important;
+        border-radius: 6px !important;
+        padding: 6px 8px !important;
+        margin: 0 auto !important;
+        width: 120px !important;
+        min-height: 0 !important;
+        height: auto !important;
+        box-shadow: none !important;
+        display: block !important;
+    }
+    </style>
+    """, unsafe_allow_html=True)
+
+    def make_square_tile(path):
+        """裁成正方形並縮成 TILE_SIZE x TILE_SIZE，保留底部特徵。"""
+        if os.path.exists(path) and Image is not None:
+            try:
+                im = Image.open(path)
+                tile = crop_square_bottom(im, TILE_SIZE)
+                return tile
+            except Exception:
+                pass
+        # fallback
+        fallback = Image.new("RGB", (TILE_SIZE, TILE_SIZE), color=(240, 240, 240))
+        return fallback
+
+    def compose_combo(left_tile, right_tile,
+                      highlight_left=None,
+                      highlight_right=None):
+        """
+        把左右兩張 tile 拼成一張圖 (1x2 橫向)，並可選擇畫紅/綠框。
+        """
+        combo = Image.new("RGB", (COMBO_W, COMBO_H), color=(255, 255, 255))
+        combo.paste(left_tile, (0, 0))
+        combo.paste(right_tile, (TILE_SIZE + GAP, 0))
+
+        draw = ImageDraw.Draw(combo)
+
+        def draw_border(x0, y0, size, color_rgb):
+            pad = 3
+            x1 = x0 + size - 1
+            y1 = y0 + size - 1
+            for off in range(3):
+                draw.rectangle(
+                    [x0 + pad + off, y0 + pad + off, x1 - pad - off, y1 - pad - off],
+                    outline=color_rgb,
+                    width=1
+                )
+
+        if highlight_left == "correct":
+            draw_border(0, 0, TILE_SIZE, (47, 158, 68))     # 綠
+        elif highlight_left == "wrong":
+            draw_border(0, 0, TILE_SIZE, (208, 0, 0))       # 紅
+
+        if highlight_right == "correct":
+            draw_border(TILE_SIZE + GAP, 0, TILE_SIZE, (47, 158, 68))
+        elif highlight_right == "wrong":
+            draw_border(TILE_SIZE + GAP, 0, TILE_SIZE, (208, 0, 0))
+
+        return combo
+
+
     for i, q in enumerate(questions):
-        st.markdown(f"**Q{i+1}. {q['name']}**")
+        st.markdown(f"**Q{i + 1}. {q['name']}**")
 
-        # 兩個候選圖檔名（左 / 右）
+        # 兩個候選檔名：左、右
         opts_files = st.session_state.opts_cache[f"opts_{i}"]
-
-        # 保險：如果某些情況下只有抓到一張圖，就補一張
-        if len(opts_files) < 2:
-            all_files = [x["filename"] for x in bank]
-            while len(opts_files) < 2:
-                extra = random.choice(all_files)
-                if extra not in opts_files:
-                    opts_files.append(extra)
-
         left_file = opts_files[0]
         right_file = opts_files[1]
 
-        # ans_key：這題學生的作答會存這裡
         ans_key = f"ans_{i}"
         chosen = st.session_state.get(ans_key, None)
-
-        # 正確解是哪個檔案
         correct_file = q["filename"]
 
-        # --- 產生每張 tile（方形小圖） ---
-        left_raw = make_square_tile(os.path.join(IMAGE_DIR, left_file))
-        right_raw = make_square_tile(os.path.join(IMAGE_DIR, right_file))
+        # 準備左右 tile
+        left_tile = make_square_tile(os.path.join(IMAGE_DIR, left_file))
+        right_tile = make_square_tile(os.path.join(IMAGE_DIR, right_file))
 
-        # --- 依學生狀態決定要不要畫框 ---
-        left_status = None
-        right_status = None
+        # 決定框色
+        highlight_left = None
+        highlight_right = None
 
         if chosen:
-            # 如果學生選了左圖
             if chosen == left_file:
                 if left_file == correct_file:
-                    left_status = "correct"
+                    highlight_left = "correct"
                 else:
-                    left_status = "wrong"
-                    # 如果左邊是錯的，就把右邊標成正解（若它是正解）
+                    highlight_left = "wrong"
                     if right_file == correct_file:
-                        right_status = "correct"
-
-            # 如果學生選了右圖
+                        highlight_right = "correct"
             elif chosen == right_file:
                 if right_file == correct_file:
-                    right_status = "correct"
+                    highlight_right = "correct"
                 else:
-                    right_status = "wrong"
+                    highlight_right = "wrong"
                     if left_file == correct_file:
-                        left_status = "correct"
-
-            # fallback：理論上不太會走到，但保留以防萬一
+                        highlight_left = "correct"
             else:
                 if left_file == correct_file:
-                    left_status = "correct"
+                    highlight_left = "correct"
                 if right_file == correct_file:
-                    right_status = "correct"
+                    highlight_right = "correct"
 
-        # --- 把框畫到圖上，得到最終顯示版本 ---
-        left_final = draw_border(left_raw, left_status)
-        right_final = draw_border(right_raw, right_status)
+        # 合圖
+        combo_img = compose_combo(
+            left_tile,
+            right_tile,
+            highlight_left=highlight_left,
+            highlight_right=highlight_right
+        )
 
-        # --- 把結果圖寫成實體檔案 (temp_images/tile_left_i.png 等)
-        left_tmp_path = os.path.join(TMP_DIR, f"tile_left_{i}.png")
-        right_tmp_path = os.path.join(TMP_DIR, f"tile_right_{i}.png")
-        left_final.save(left_tmp_path)
-        right_final.save(right_tmp_path)
+        # 🔁 這裡改：用 TMP_DIR 而不是 /tmp
+        combo_path = os.path.join(TMP_DIR, f"combo_{i}.png")
+        combo_img.save(combo_path)
 
-        # --- 兩欄並列 (手機也盡力維持左右排) ---
-        colL, colR = st.columns(2)
+        # 顯示這題的合成圖
+        st.image(combo_path, width=COMBO_W)
 
-        with colL:
-            # 顯示左邊的圖
-            st.image(left_tmp_path, width=TILE_SIZE)
-            # 底下放「選左邊」按鈕
-            if st.button("選左邊", key=f"left_btn_{i}"):
-                st.session_state[ans_key] = left_file
-                st.rerun()  # 立即重整，讓紅/綠框與解析出現
+        # ====== 按鈕列 (左右 slot) ======
+        st.markdown(
+            """
+            <div class="answer-row">
+                <div class="choice-btn-slot" id="slot-left"></div>
+                <div class="choice-btn-slot" id="slot-right"></div>
+            </div>
+            """,
+            unsafe_allow_html=True
+        )
 
-        with colR:
-            st.image(right_tmp_path, width=TILE_SIZE)
-            if st.button("選右邊", key=f"right_btn_{i}"):
-                st.session_state[ans_key] = right_file
-                st.rerun()
+        # 左鍵
+        if st.button("選左邊", key=f"left_{i}"):
+            st.session_state[ans_key] = left_file
+            st.rerun()
+        # 右鍵
+        if st.button("選右邊", key=f"right_{i}"):
+            st.session_state[ans_key] = right_file
+            st.rerun()
 
-        # --- 答題結果解析區塊 ---
+        # ====== 題目回饋 ======
         if chosen:
             if chosen == correct_file:
-                # 答對
                 st.markdown(
-                    "<div style='color:#2f9e44;font-weight:600;'>✔ 正確！</div>",
+                    "<div style='color:#2f9e44;font-weight:600; margin:8px 0;'>"
+                    "✔ 正確！"
+                    "</div>",
                     unsafe_allow_html=True
                 )
             else:
-                # 答錯，顯示該張圖實際是誰
                 picked_name = filename_to_name.get(chosen, "（未知）")
                 st.markdown(
-                    f"<div style='color:#d00000;font-weight:600;'>✘ 錯誤，此為：{picked_name}</div>",
+                    f"<div style='color:#d00000;font-weight:600; margin:8px 0;'>"
+                    f"✘ 答錯<br>此為：{picked_name}"
+                    f"</div>",
                     unsafe_allow_html=True
                 )
 
-                # 紀錄錯題（避免重複記錄同一題同一錯）
-                sig = f"mode3-{i}-{chosen}"
-                already_logged = any(
-                    w.get("sig") == sig for w in st.session_state.wrong_answers
-                )
-                if not already_logged:
+                # 紀錄錯題
+                signature = f"mode3-{i}-{chosen}"
+                if not any(w.get("sig") == signature for w in st.session_state.wrong_answers):
                     st.session_state.wrong_answers.append({
-                        "sig": sig,
+                        "sig": signature,
                         "question": f"請找出：{q['name']}",
                         "correct": q["name"],
                         "chosen": chosen,
                         "chosen_name": picked_name,
-                        "img": chosen,  # 用錯的那張或學生點到的那張
+                        "img": chosen,
                     })
 
-        # --- 題間分隔線 ---
         st.markdown("<hr style='margin:16px 0;' />", unsafe_allow_html=True)
 
-        # --- 統計作答進度 & 分數 ---
+        # 統計答題數/分數
         if chosen is not None:
             done += 1
             if chosen == correct_file:
                 score += 1
 
-    # === 題組結尾：顯示當前進度條 / 答對題數 ===
-    progress_ratio = (done / len(questions)) if questions else 0
+    # ====== 頁尾進度條 ======
+    progress_ratio = done / len(questions) if questions else 0
     st.markdown(
         f"""
         <div style='margin-top:8px;font-size:0.9rem;'>
             進度：{done}/{len(questions)}　|　答對：{score}
         </div>
-
-        <div style='height:8px;
-                    width:100%;
-                    background:#e9ecef;
-                    border-radius:4px;
-                    overflow:hidden;
-                    margin:6px 0 24px 0;'>
-            <div style='height:8px;
-                        width:{progress_ratio*100}%;
-                        background:#74c69d;'>
-            </div>
+        <div style='height:8px;width:100%;background:#e9ecef;border-radius:4px;overflow:hidden;
+                    margin-top:4px;margin-bottom:24px;'>
+            <div style='height:8px;width:{progress_ratio*100}%;background:#74c69d;'></div>
         </div>
         """,
         unsafe_allow_html=True
     )
 
+    final_score = score
+    final_done = done
 
+# ======================================================
+# 錯題回顧區塊（所有模式都顯示）
+# ======================================================
+if st.session_state.wrong_answers:
+    st.markdown("### ❌ 錯題回顧")
+    for miss in st.session_state.wrong_answers:
+        # 圖片
+        miss_img = os.path.join(IMAGE_DIR, miss["img"])
+        render_img_card(miss_img, size=140)
+
+        # 文字
+        qtxt = miss.get("question", "")
+        corr = miss.get("correct", "")
+        chosen_name = miss.get("chosen_name", "")
+        st.markdown(
+            f"- 題目：{qtxt}  \n"
+            f"- 正解：**{corr}**  \n"
+            f"- 你選了：{chosen_name}",
+            unsafe_allow_html=False
+        )
+        st.markdown("<hr />", unsafe_allow_html=True)
+
+# ======================================================
 # 最底部：重新開始本模式
 # ======================================================
 st.markdown("---")
