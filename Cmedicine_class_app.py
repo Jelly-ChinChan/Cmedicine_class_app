@@ -447,31 +447,21 @@ elif mode_is_3:
     score = 0
     done = 0
 
-    # ===== CSS 造型設定 =====
+    # ===== 造型：框線＋按鈕寬度描述 =====
     st.markdown("""
     <style>
-    .choice-row {
-        display: flex;
-        justify-content: center;
-        gap: 8px;
-        flex-wrap: nowrap;
-        margin-top: 4px;
-    }
-    .img-box {
-        width: 110px;
-        height: 110px;
-        border-radius: 8px;
+    .option-wrapper {
+        display: inline-block;
         border: 3px solid transparent;
-        object-fit: cover;
+        border-radius: 8px;
+        padding: 0;
+        margin-bottom: 4px;
     }
-    .img-box.correct {
+    .option-wrapper.correct {
         border-color: #2f9e44;
     }
-    .img-box.wrong {
+    .option-wrapper.wrong {
         border-color: #d00000;
-    }
-    .choice-card {
-        text-align: center;
     }
     div.stButton > button {
         background: #f1f3f5 !important;
@@ -481,66 +471,131 @@ elif mode_is_3:
         line-height: 1.2 !important;
         border-radius: 6px !important;
         padding: 4px 6px !important;
-        margin-top: 2px !important;
+        margin: 0 auto 12px auto !important;
         width: 110px !important;
+        min-height: 0 !important;
+        height: auto !important;
+        box-shadow: none !important;
+        display: block !important;
     }
     </style>
     """, unsafe_allow_html=True)
 
-    # ===== 問題顯示 =====
     for i, q in enumerate(questions):
         st.markdown(f"**Q{i+1}. {q['name']}**")
 
-        opts_files = st.session_state.opts_cache[f"opts_{i}"]
+        opts_files = st.session_state.opts_cache[f"opts_{i}"]  # 兩個檔名
         ans_key = f"ans_{i}"
         chosen = st.session_state.get(ans_key, None)
 
-        # 準備兩張圖
-        cards = []
+        # 我們準備兩個選項（上、下）
+        option_data = []
         for opt_idx, opt_file in enumerate(opts_files):
             img_path = os.path.join(IMAGE_DIR, opt_file)
-            frame_class = "img-box"
-            if chosen:
-                if opt_file == q["filename"]:
-                    frame_class += " correct"
-                elif chosen == opt_file:
-                    frame_class += " wrong"
 
+            # 先裁成正方形 110x110，保留底部，再存成暫存檔
             disp_path = img_path
             if os.path.exists(img_path) and Image is not None:
                 try:
                     img_obj = Image.open(img_path)
-                    square = crop_square_bottom(img_obj, 110)
-                    disp_path = f"/tmp/{i}_{opt_idx}.png"
-                    square.save(disp_path)
+                    square_img = crop_square_bottom(img_obj, 110)
+                    tmp_name = f"/tmp/mode3_{i}_{opt_idx}.png"
+                    square_img.save(tmp_name)
+                    disp_path = tmp_name
                 except Exception:
                     pass
 
-            cards.append({"file": opt_file, "disp": disp_path, "frame": frame_class})
+            # 框線狀態
+            frame_class = "option-wrapper"
+            if chosen:
+                if chosen == q["filename"] and opt_file == chosen:
+                    frame_class = "option-wrapper correct"
+                elif chosen == opt_file and chosen != q["filename"]:
+                    frame_class = "option-wrapper wrong"
+                elif chosen != opt_file and opt_file == q["filename"]:
+                    frame_class = "option-wrapper correct"
 
-        # ===== 橫向排兩張 =====
-        col1, col2 = st.columns(2)
+            option_data.append({
+                "file": opt_file,
+                "disp": disp_path,
+                "frame_class": frame_class,
+                "btn_key": f"optbtn_{i}_{opt_idx}",
+            })
 
-        for j, col in enumerate([col1, col2]):
-            with col:
-                c = cards[j]
-                st.markdown(
-                    f"<img src='file://{c['disp']}' class='{c['frame']}'>",
-                    unsafe_allow_html=True,
-                )
-                if st.button("選這張", key=f"btn_{i}_{j}"):
-                    st.session_state[ans_key] = c["file"]
-                    st.rerun()
+        # 逐一顯示（直式二選一）
+        for opt in option_data:
+            # 外框（顯示紅/綠/透明）
+            st.markdown(
+                f"<div class='{opt['frame_class']}'>",
+                unsafe_allow_html=True
+            )
 
-        # ===== 顯示答題結果 =====
+            # 圖片用官方 st.image() 呈現，避免 HTML <img file://...> 被擋
+            if os.path.exists(opt["disp"]):
+                st.image(opt["disp"], width=110)
+            else:
+                st.image(os.path.join(IMAGE_DIR, opt["file"]), width=110)
+
+            st.markdown("</div>", unsafe_allow_html=True)
+
+            # 「選這張」按鈕（寬度 = 110px）
+            if st.button("選這張", key=opt["btn_key"]):
+                st.session_state[ans_key] = opt["file"]
+                st.rerun()
+
+        # 答題後顯示解析
         if chosen:
             if chosen == q["filename"]:
-                st.success("✔ 正確！")
+                st.markdown(
+                    "<div style='color:#2f9e44;font-weight:600; margin-bottom:8px;'>✔ 正確！</div>",
+                    unsafe_allow_html=True
+                )
             else:
                 picked_name = filename_to_name.get(chosen, "（未知）")
-                st.error(f"✘ 答錯，此為：{picked_name}")
+                st.markdown(
+                    f"<div style='color:#d00000;font-weight:600; margin-bottom:8px;'>"
+                    f"✘ 答錯<br>此為：{picked_name}"
+                    f"</div>",
+                    unsafe_allow_html=True
+                )
 
-        st.markdown("<hr>", unsafe_allow_html=True)
+                # 紀錄錯題
+                signature = f"mode3-{i}-{chosen}"
+                if not any(w.get("sig") == signature for w in st.session_state.wrong_answers):
+                    st.session_state.wrong_answers.append({
+                        "sig": signature,
+                        "question": f"請找出：{q['name']}",
+                        "correct": q["name"],
+                        "chosen": chosen,
+                        "chosen_name": picked_name,
+                        "img": chosen,
+                    })
+
+        st.markdown("<hr style='margin:16px 0;' />", unsafe_allow_html=True)
+
+        # 計分統計
+        if chosen is not None:
+            done += 1
+            if chosen == q["filename"]:
+                score += 1
+
+    # 底部進度條
+    progress_ratio = done / len(questions) if questions else 0
+    st.markdown(
+        f"""
+        <div style='margin-top:8px;font-size:0.9rem;'>
+            進度：{done}/{len(questions)}　|　答對：{score}
+        </div>
+        <div style='height:8px;width:100%;background:#e9ecef;border-radius:4px;overflow:hidden;
+                    margin-top:4px;margin-bottom:24px;'>
+            <div style='height:8px;width:{progress_ratio*100}%;background:#74c69d;'></div>
+        </div>
+        """,
+        unsafe_allow_html=True
+    )
+
+    final_score = score
+    final_done = done
 
 
 # ========== 重新開始本模式（最底） ==========
