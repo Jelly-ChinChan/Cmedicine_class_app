@@ -9,11 +9,11 @@
 #   - 頁面最底部顯示「錯題回顧」區塊，包含正解、學生選錯的名稱、參考圖
 #
 # 2025-10-25 更新：
-#   1. 畫面上方顯示目前模式 + 🔄重新開始本模式 按鈕
-#   2. 成績卡片加入清楚的大字 summary（本次得分 / 正確率）
-#   3. 加入「錯題回顧」區塊（所有模式最底部）
-#   4. 模式3改成「整張圖片就是按鈕」：學生直接點圖片作答，不再看到額外按鈕
-#      - 用 form + submit_button 的技巧，讓每一張圖片本身就是可點擊的答案
+#   1. 移除對 sidebar 的依賴：模式選擇改到主畫面頂端（手機也看得到）
+#   2. 畫面上方顯示目前模式 + 🔄重新開始本模式 按鈕
+#   3. 成績卡片加入清楚的大字 summary（本次得分 / 正確率）
+#   4. 頁面最底部的「錯題回顧」區塊
+#   5. 模式3改成「整張圖片就是按鈕」：學生直接點圖片作答，不再看到額外按鈕
 
 import streamlit as st
 import pandas as pd
@@ -48,7 +48,7 @@ st.set_page_config(
     layout="centered",
 )
 
-# ====== CSS：手機上仍維持2欄併排 (模式3)，卡片樣式、間距、上方模式badge ======
+# ====== CSS：手機上仍維持2欄併排 (模式3)，卡片樣式、間距、模式badge ======
 st.markdown(
     """
     <style>
@@ -73,7 +73,7 @@ st.markdown(
         margin-bottom: 0.25rem;
     }
 
-    /* 模式標籤+重置區塊的外觀 */
+    /* 模式標籤+重置區塊外觀 */
     .mode-banner {
         background:#f1f3f5;
         border:1px solid #dee2e6;
@@ -92,9 +92,6 @@ st.markdown(
         font-size:0.9rem;
         font-weight:600;
         color:#212529;
-    }
-    .reset-btn-wrapper {
-        flex-shrink:0;
     }
     </style>
     """,
@@ -230,7 +227,7 @@ def init_mode(bank, mode):
     """
     根據模式決定題目集，並清空上次作答與錯題紀錄
     """
-    # 如果你希望全班同一套題組，可以固定種子
+    # 若希望全班同一套題組，可固定種子，例如：
     # random.seed(20251025)
 
     if mode == "隨機10題測驗":
@@ -258,38 +255,45 @@ def init_mode(bank, mode):
 
 # ================= 啟動 / 模式控制 =================
 bank = load_question_bank()
+filename_to_name = {item["filename"]: item["name"] for item in bank}  # 模式3用來查名
 
-# 給模式3使用：由 filename 找回對應藥名
-filename_to_name = {item["filename"]: item["name"] for item in bank}
+# --- 模式選擇現在放主畫面，不用 sidebar ---
+if "mode" not in st.session_state:
+    st.session_state.mode = DEFAULT_MODE
+if "questions" not in st.session_state:
+    init_mode(bank, st.session_state.mode)
+if "wrong_answers" not in st.session_state:
+    st.session_state.wrong_answers = []
 
-sidebar_mode = st.sidebar.radio(
-    "選擇測驗模式",
+# 顯示模式選擇的 radio（主畫面）
+st.markdown("#### 🌿 模式選擇")
+selected_mode = st.radio(
+    "請選擇測驗模式",
     ["全部題目", "隨機10題測驗", "圖片選擇模式（2x2）"],
-    index=0 if DEFAULT_MODE == "全部題目" else 1,
+    index=["全部題目", "隨機10題測驗", "圖片選擇模式（2x2）"].index(st.session_state.mode),
+    horizontal=False,
 )
 
-if "mode" not in st.session_state or sidebar_mode != st.session_state.mode:
-    init_mode(bank, sidebar_mode)
+# 如果 radio 選的模式不同，重新初始化題組
+if selected_mode != st.session_state.mode:
+    init_mode(bank, selected_mode)
 
 questions = st.session_state.questions
 all_names = [q["name"] for q in questions]
 
-if "wrong_answers" not in st.session_state:
-    st.session_state.wrong_answers = []  # list of dicts: {"question":..., "correct":..., "chosen":..., "chosen_name":..., "img":..., "sig":...}
-
-# 每題的選項固定
+# 每題選項固定（緩存）
 for i, q in enumerate(questions):
     cache_key = f"opts_{i}"
     if cache_key not in st.session_state.opts_cache:
         if st.session_state.mode in ["全部題目", "隨機10題測驗"]:
-            # 模式1/2 -> 選藥名
+            # 模式1/2：四個藥名選項
             st.session_state.opts_cache[cache_key] = build_options(
                 q["name"],
                 all_names,
                 k=NUM_OPTIONS
             )
         else:
-            # 模式3 -> 選圖片（用 filename 當選項）
+            # 模式3：四張圖片 (檔名)
             all_files = [x["filename"] for x in bank]
             st.session_state.opts_cache[cache_key] = build_options(
                 q["filename"],
@@ -327,11 +331,10 @@ if mode_is_12:
     for i, q in enumerate(questions):
         st.markdown(f"**Q{i+1}. 這個中藥的名稱是？**")
 
-        # 顯示題目圖片（固定 300x300）
+        # 顯示題目圖片
         img_path = os.path.join(IMAGE_DIR, q["filename"])
         render_img_card(img_path, size=FIXED_SIZE, border_color=None)
 
-        # 本題的四個藥名選項
         opts = st.session_state.opts_cache[f"opts_{i}"]
 
         ans_key = f"ans_{i}"
@@ -356,14 +359,13 @@ if mode_is_12:
                     unsafe_allow_html=True,
                 )
             else:
-                # 顯示解析
                 st.markdown(
                     f"<div style='color:#d00000;font-weight:600;'>解析：✘ 答錯 "
                     f"正確答案是「{q['name']}」。</div>",
                     unsafe_allow_html=True,
                 )
 
-                # 紀錄錯題（如果還沒記錄過）
+                # 紀錄錯題
                 signature = f"mode12-{i}-{chosen}"
                 already_logged = any(w.get("sig") == signature for w in st.session_state.wrong_answers)
                 if not already_logged:
@@ -372,13 +374,13 @@ if mode_is_12:
                         "question": "辨識圖片屬於哪個中藥？",
                         "correct": q["name"],
                         "chosen": chosen,
-                        "chosen_name": chosen,  # 在這個模式下 chosen 就是藥名
+                        "chosen_name": chosen,
                         "img": q["filename"],
                     })
 
         st.markdown("<hr style='margin:20px 0;' />", unsafe_allow_html=True)
 
-    # 底部顯示目前進度 & 得分（成績卡片 summary 強化）
+    # 成績卡片 summary
     progress = done / len(questions) if questions else 0
     percent = (score / len(questions) * 100) if questions else 0
 
@@ -426,14 +428,13 @@ elif mode_is_3:
     done = 0
 
     for i, q in enumerate(questions):
-        # 題目：顯示要找的藥名
         st.markdown(f"**Q{i+1}. {q['name']}**")
 
         opts = st.session_state.opts_cache[f"opts_{i}"]
         ans_key = f"ans_{i}"
         chosen = st.session_state.get(ans_key, None)
 
-        # 2x2：第一列兩張圖，第二列兩張圖
+        # 2x2 格子
         rows = [opts[:2], opts[2:]]
         for row_idx, row_opts in enumerate(rows):
             cols = st.columns(2)
@@ -442,11 +443,10 @@ elif mode_is_3:
                 img_path = os.path.join(IMAGE_DIR, opt_filename)
 
                 with cols[col_idx]:
-                    # 「整張圖片就是按鈕」版本
-                    # 每個選項是一個 form，圖片本身是 <button type="submit">
+                    # 整張圖片就是按鈕：用 form submit 模式
                     form_key = f"form_{i}_{row_idx}_{col_idx}"
                     with st.form(key=form_key, clear_on_submit=False):
-                        # 決定邊框顏色（紅/綠框）
+                        # 邊框顏色
                         border_color = None
                         if chosen:
                             if chosen == q["filename"] and opt_filename == chosen:
@@ -456,7 +456,7 @@ elif mode_is_3:
                             elif chosen != opt_filename and opt_filename == q["filename"]:
                                 border_color = "#2f9e44"  # 正解同時亮綠框
 
-                        # 準備圖片HTML
+                        # 準備圖片 HTML
                         img_html = ""
                         if os.path.isfile(img_path) and Image is not None:
                             try:
@@ -489,7 +489,7 @@ elif mode_is_3:
                                 pass
 
                         if img_html == "":
-                            # fallback：沒 PIL 或失敗就用檔案路徑顯示
+                            # fallback (PIL 不可用就用檔案路徑)
                             border_css = (
                                 f"border:4px solid {border_color};"
                                 if border_color else
@@ -513,24 +513,20 @@ elif mode_is_3:
                         # 顯示圖片按鈕
                         st.markdown(img_html, unsafe_allow_html=True)
 
-                        # 真正觸發 Streamlit 狀態更新的按鈕（隱形用）
                         submitted = st.form_submit_button(label=" ", use_container_width=False)
 
-                        # 一旦 submit -> 紀錄學生選了哪一張
                         if submitted:
                             st.session_state[ans_key] = opt_filename
-                            chosen = opt_filename  # 更新本地變數，下面解析立即反應
+                            chosen = opt_filename  # 即時更新，讓下方解析顯示
 
-                    # 解析文字：只對「你按的那張圖」顯示
+                    # 即時解析：只對剛點那張圖顯示
                     if chosen == opt_filename:
                         if chosen == q["filename"]:
-                            # 答對
                             st.markdown(
                                 "<div style='color:#2f9e44;font-weight:600;'>✔ 正確！</div>",
                                 unsafe_allow_html=True
                             )
                         else:
-                            # 答錯 -> 告訴學生：這張其實是什麼藥材
                             picked_name = filename_to_name.get(chosen, "（未知）")
                             st.markdown(
                                 f"<div style='color:#d00000;font-weight:600;'>"
@@ -539,7 +535,7 @@ elif mode_is_3:
                                 unsafe_allow_html=True
                             )
 
-                            # 紀錄錯題（如果還沒記過）
+                            # 紀錄錯題
                             signature = f"mode3-{i}-{chosen}"
                             already_logged = any(w.get("sig") == signature for w in st.session_state.wrong_answers)
                             if not already_logged:
@@ -549,18 +545,18 @@ elif mode_is_3:
                                     "correct": q["name"],
                                     "chosen": chosen,
                                     "chosen_name": picked_name,
-                                    "img": chosen,  # 顯示學生按錯的那張
+                                    "img": chosen,
                                 })
 
         st.markdown("<hr style='margin:16px 0;' />", unsafe_allow_html=True)
 
-        # 統計作答與分數
+        # 計分統計
         if chosen is not None:
             done += 1
             if chosen == q["filename"]:
                 score += 1
 
-    # 模式3底部：進度+得分（成績卡片 summary 強化）
+    # 成績卡片 summary
     progress = done / len(questions) if questions else 0
     percent = (score / len(questions) * 100) if questions else 0
 
@@ -612,7 +608,6 @@ else:
         cols_review = st.columns([1,2])
         with cols_review[0]:
             wrong_img_path = os.path.join(IMAGE_DIR, w["img"])
-            # 顯示學生按錯的圖，紅框再提醒
             render_img_card(
                 path=wrong_img_path,
                 size=120,
