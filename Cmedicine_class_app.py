@@ -447,38 +447,45 @@ elif mode_is_3:
     score = 0
     done = 0
 
-    # CSS：強制左右並排 + 框貼圖 + 按鈕無灰底、無多餘空白
+    # CSS：手機安全版，兩張100px小卡水平置中，不炸版
     st.markdown("""
     <style>
-    div[data-testid="stHorizontalBlock"] {
-        flex-wrap: nowrap !important;
-    }
-    div[data-testid="column"] {
-        flex: 0 0 48% !important;
-        max-width: 48% !important;
-        padding-left: 1px !important;
-        padding-right: 1px !important;
-        margin: 0 !important;
-    }
-
-    .choice-btn-tight {
-        display:block;
-        background:none;
-        border:none;
+    /* 整排容器：兩個選項橫向併排置中 */
+    .choice-row-flex {
+        width:100%;
+        display:flex;
+        flex-direction:row;
+        justify-content:center;
+        align-items:flex-start;
+        gap:8px;
+        flex-wrap:nowrap;           /* 不換行，維持1x2 */
+        margin:0;
         padding:0;
-        margin:0 auto;
-        cursor:pointer;
-        width:90%;
-        max-width:120px;
         box-sizing:border-box;
     }
 
+    /* 單一選項容器，固定卡片寬度 */
+    .choice-card-wrap {
+        width:100px;
+        max-width:100px;
+        box-sizing:border-box;
+        display:flex;
+        justify-content:center;
+        align-items:flex-start;
+        padding:0;
+        margin:0;
+    }
+
+    /* 真正的 clickable 區塊會用 form_submit_button 觸發
+       我們把圖片+框畫在上面，並把 button 本體隱身到高度0
+    */
     .choice-frame-tight {
         border:2.5px solid transparent;
         border-radius:8px;
         overflow:hidden;
         box-sizing:border-box;
-        width:100%;
+        width:100px;
+        max-width:100px;
         margin:0;
         padding:0;
     }
@@ -495,15 +502,17 @@ elif mode_is_3:
         box-sizing:border-box;
     }
 
-    /* 移除 submit 按鈕灰底 */
-    div.stButton > button[kind="secondary"] {
+    /* 把 submit_button 變成零高度透明，不要那塊灰色底和大邊框 */
+    .ghost-btn-class > button {
         background:none !important;
         border:none !important;
         padding:0 !important;
         margin:0 !important;
-        height:0 !important;
         min-height:0 !important;
+        height:0 !important;
         box-shadow:none !important;
+        border-radius:0 !important;
+        color:transparent !important;
     }
     </style>
     """, unsafe_allow_html=True)
@@ -511,13 +520,17 @@ elif mode_is_3:
     for i, q in enumerate(questions):
         st.markdown(f"**Q{i+1}. {q['name']}**")
 
-        opts_files = st.session_state.opts_cache[f"opts_{i}"]
+        opts_files = st.session_state.opts_cache[f"opts_{i}"]  # 應該長度2
         ans_key = f"ans_{i}"
         chosen = st.session_state.get(ans_key, None)
-        cols = st.columns(2)
 
-        for col_idx, opt_file in enumerate(opts_files):
+        # 先把兩個圖片都轉好（含框 class）
+        option_blocks = []  # list of dict: {html_block, form_key, btn_key, file_id}
+
+        for idx_in_row, opt_file in enumerate(opts_files):
             img_path = os.path.join(IMAGE_DIR, opt_file)
+
+            # 判斷框線狀態
             frame_cls = "choice-frame-tight"
             if chosen:
                 if chosen == q["filename"] and opt_file == chosen:
@@ -527,10 +540,12 @@ elif mode_is_3:
                 elif chosen != opt_file and opt_file == q["filename"]:
                     frame_cls = "choice-frame-tight correct"
 
+            # 準備圖片
             img_b64 = ""
             if os.path.isfile(img_path) and Image is not None:
                 try:
                     _img = Image.open(img_path)
+                    # 縮到接近目標寬100px，保留畫質
                     _img = crop_square_bottom(_img, 140)
                     import io, base64
                     buf = io.BytesIO()
@@ -539,36 +554,111 @@ elif mode_is_3:
                 except Exception:
                     img_b64 = ""
 
-            img_tag = f'<img class="choice-img-tight" src="data:image/png;base64,{img_b64}">' if img_b64 else f'<img class="choice-img-tight" src="file://{img_path}">'
+            if img_b64:
+                img_tag = f'<img class="choice-img-tight" src="data:image/png;base64,{img_b64}">'
+            else:
+                img_tag = f'<img class="choice-img-tight" src="file://{img_path}">'
 
-            with cols[col_idx]:
-                form_key = f"form_{i}_{col_idx}"
-                with st.form(key=form_key):
-                    st.markdown(
-                        f"""
-                        <button class="choice-btn-tight" type="submit">
-                            <div class="{frame_cls}">
-                                {img_tag}
-                            </div>
-                        </button>
-                        """,
-                        unsafe_allow_html=True,
-                    )
-                    clicked = st.form_submit_button(label="", use_container_width=True)
-                    if clicked:
-                        st.session_state[ans_key] = opt_file
-                        st.rerun()
+            # HTML 內容（圖片+框），寬100px，不含按鈕本體
+            html_block = f"""
+            <div class="choice-card-wrap">
+                <div class="{frame_cls}">
+                    {img_tag}
+                </div>
+            </div>
+            """
 
-        # 答題解析
+            option_blocks.append({
+                "html": html_block,
+                "form_key": f"form_{i}_{idx_in_row}",
+                "btn_key": f"submit_{i}_{idx_in_row}",
+                "file_id": opt_file,
+            })
+
+        # 把兩塊卡片並排畫出（視覺）
+        # 我們先渲染整排 flex row空容器，再在下面各放一個實際的 form+隱形submit_button
+        st.markdown(
+            "<div class='choice-row-flex'>" +
+            option_blocks[0]["html"] +
+            option_blocks[1]["html"] +
+            "</div>",
+            unsafe_allow_html=True,
+        )
+
+        # 再各自放兩個 form，負責接點擊事件
+        # 左卡 form
+        with st.form(key=option_blocks[0]["form_key"]):
+            clicked_left = st.form_submit_button(
+                label="",
+                use_container_width=True,
+                type="secondary",
+                key=option_blocks[0]["btn_key"],
+            )
+            # 把這顆 submit_button 變幽靈（零高度）
+            st.markdown(
+                "<style>"
+                f"#{option_blocks[0]['btn_key']} {{"
+                "background:none !important;"
+                "border:none !important;"
+                "padding:0 !important;"
+                "margin:0 !important;"
+                "min-height:0 !important;"
+                "height:0 !important;"
+                "box-shadow:none !important;"
+                "border-radius:0 !important;"
+                "color:transparent !important;"
+                "}}"
+                "</style>",
+                unsafe_allow_html=True,
+            )
+
+            if clicked_left:
+                st.session_state[ans_key] = option_blocks[0]["file_id"]
+                st.rerun()
+
+        # 右卡 form
+        with st.form(key=option_blocks[1]["form_key"]):
+            clicked_right = st.form_submit_button(
+                label="",
+                use_container_width=True,
+                type="secondary",
+                key=option_blocks[1]["btn_key"],
+            )
+            st.markdown(
+                "<style>"
+                f"#{option_blocks[1]['btn_key']} {{"
+                "background:none !important;"
+                "border:none !important;"
+                "padding:0 !important;"
+                "margin:0 !important;"
+                "min-height:0 !important;"
+                "height:0 !important;"
+                "box-shadow:none !important;"
+                "border-radius:0 !important;"
+                "color:transparent !important;"
+                "}}"
+                "</style>",
+                unsafe_allow_html=True,
+            )
+
+            if clicked_right:
+                st.session_state[ans_key] = option_blocks[1]["file_id"]
+                st.rerun()
+
+        # 解析（作答後）
         if chosen:
             if chosen == q["filename"]:
-                st.markdown("<div style='color:#2f9e44;font-weight:600;'>✔ 正確！</div>", unsafe_allow_html=True)
+                st.markdown(
+                    "<div style='color:#2f9e44;font-weight:600;'>✔ 正確！</div>",
+                    unsafe_allow_html=True
+                )
             else:
                 picked_name = filename_to_name.get(chosen, "（未知）")
                 st.markdown(
                     f"<div style='color:#d00000;font-weight:600;'>✘ 答錯<br>此為：{picked_name}</div>",
                     unsafe_allow_html=True
                 )
+
                 signature = f"mode3-{i}-{chosen}"
                 if not any(w.get("sig") == signature for w in st.session_state.wrong_answers):
                     st.session_state.wrong_answers.append({
@@ -582,26 +672,30 @@ elif mode_is_3:
 
         st.markdown("<hr style='margin:16px 0;' />", unsafe_allow_html=True)
 
+        # 計分統計
         if chosen is not None:
             done += 1
             if chosen == q["filename"]:
                 score += 1
 
-    # 進度條
+    # 底部進度條
     progress_ratio = done / len(questions) if questions else 0
     st.markdown(
         f"""
         <div style='margin-top:8px;font-size:0.9rem;'>
             進度：{done}/{len(questions)}　|　答對：{score}
         </div>
-        <div style='height:8px;width:100%;background:#e9ecef;border-radius:4px;overflow:hidden;margin-top:4px;margin-bottom:24px;'>
+        <div style='height:8px;width:100%;background:#e9ecef;border-radius:4px;overflow:hidden;
+                    margin-top:4px;margin-bottom:24px;'>
             <div style='height:8px;width:{progress_ratio*100}%;background:#74c69d;'></div>
         </div>
         """,
         unsafe_allow_html=True,
     )
+
     final_score = score
     final_done = done
+
 
 
 
