@@ -2,17 +2,14 @@
 # 三模式中藥測驗（+ 錯題回顧）
 #   1. 全部題目（看圖選藥名）
 #   2. 隨機10題測驗
-#   3. 圖片選擇模式（1x2）：兩張圖並列，按圖下方按鈕作答，紅綠框回饋
-#
-# 2025-10-25 版本修正：
-#   ✅ 修正 mode_is_3 錯誤
-#   ✅ 修正 /tmp 儲存錯誤
-#   ✅ 手機上「選左邊」「選右邊」按鈕對齊圖片正下方
+#   3. 圖片選擇模式（1x2）
 
 import streamlit as st
 import pandas as pd
 import random
 import os
+import io
+import base64
 
 try:
     from PIL import Image, ImageDraw
@@ -94,7 +91,6 @@ def render_img_card(path, size=300, border_color=None):
     try:
         img = Image.open(path)
         img = crop_square_bottom(img, size)
-        import io, base64
         buf = io.BytesIO()
         img.save(buf, format="PNG")
         b64 = base64.b64encode(buf.getvalue()).decode("utf-8")
@@ -116,32 +112,40 @@ def init_mode(bank, mode):
     else:
         qset = bank[:]
     random.shuffle(qset)
+
     st.session_state.mode = mode
     st.session_state.questions = qset
     st.session_state.opts_cache = {}
     st.session_state.wrong_answers = []
+
     for k in list(st.session_state.keys()):
-        if k.startswith("ans_"):
+        if "_ans_" in k:
             del st.session_state[k]
 
 # ================= 初始化 =================
 bank = load_question_bank()
 filename_to_name = {x["filename"]: x["name"] for x in bank}
-if "mode" not in st.session_state: st.session_state.mode = DEFAULT_MODE
-if "questions" not in st.session_state: init_mode(bank, st.session_state.mode)
-if "wrong_answers" not in st.session_state: st.session_state.wrong_answers = []
+
+if "mode" not in st.session_state:
+    st.session_state.mode = DEFAULT_MODE
+if "questions" not in st.session_state:
+    init_mode(bank, st.session_state.mode)
+if "wrong_answers" not in st.session_state:
+    st.session_state.wrong_answers = []
 
 # ================= 模式選擇 =================
 st.markdown("### 🌿 模式選擇")
 selected_mode = st.radio("請選擇測驗模式", ["全部題目", "隨機10題測驗", "圖片選擇模式（1x2）"],
-                         index=["全部題目", "隨機10題測驗", "圖片選擇模式（1x2）"].index(st.session_state.mode))
+    index=["全部題目", "隨機10題測驗", "圖片選擇模式（1x2）"].index(st.session_state.mode))
+
 if selected_mode != st.session_state.mode:
     init_mode(bank, selected_mode)
+
 questions = st.session_state.questions
 
 # 緩存選項
 for i, q in enumerate(questions):
-    key = f"opts_{i}"
+    key = f"opts_{st.session_state.mode}_{i}"
     if key not in st.session_state.opts_cache:
         if st.session_state.mode in ["全部題目", "隨機10題測驗"]:
             st.session_state.opts_cache[key] = build_options(q["name"], [x["name"] for x in bank])
@@ -149,7 +153,8 @@ for i, q in enumerate(questions):
             cand = build_options(q["filename"], [x["filename"] for x in bank], k=2)
             while len(cand) < 2:
                 extra = random.choice([x["filename"] for x in bank])
-                if extra not in cand: cand.append(extra)
+                if extra not in cand:
+                    cand.append(extra)
             st.session_state.opts_cache[key] = cand[:2]
 
 st.markdown(f"<div class='mode-banner-box'>目前模式：{st.session_state.mode}</div>", unsafe_allow_html=True)
@@ -157,19 +162,30 @@ st.markdown(f"<div class='mode-banner-box'>目前模式：{st.session_state.mode
 # ================= 模式1/2 =================
 if st.session_state.mode in ["全部題目", "隨機10題測驗"]:
     score = done = 0
+
     for i, q in enumerate(questions):
+
         st.markdown(f"**Q{i+1}. 這個中藥的名稱是？**")
         render_img_card(os.path.join(IMAGE_DIR, q["filename"]), size=FIXED_SIZE)
-        opts = st.session_state.opts_cache[f"opts_{i}"]
-        ans_key = f"ans_{i}"
-        st.radio("選項", opts, key=ans_key, label_visibility="collapsed")
-        chosen = st.session_state[ans_key]
-        done += 1
-        if chosen == q["name"]:
-            score += 1
-            st.markdown("<div class='opt-result-correct'>✔ 正確！</div>", unsafe_allow_html=True)
-        else:
-            st.markdown(f"<div class='opt-result-wrong'>✘ 錯誤，正確答案是「{q['name']}」</div>", unsafe_allow_html=True)
+
+        opts = st.session_state.opts_cache[f"opts_{st.session_state.mode}_{i}"]
+        ans_key = f"{st.session_state.mode}_ans_{i}"
+
+        # 預設不要選任何選項
+        chosen = st.session_state.get(ans_key, None)
+
+        st.radio("選項", opts, key=ans_key, label_visibility="collapsed", index=None)
+
+        chosen = st.session_state.get(ans_key, None)
+
+        if chosen is not None:
+            done += 1
+            if chosen == q["name"]:
+                score += 1
+                st.markdown("<div class='opt-result-correct'>✔ 正確！</div>", unsafe_allow_html=True)
+            else:
+                st.markdown(f"<div class='opt-result-wrong'>✘ 錯誤，正確答案是「{q['name']}」</div>", unsafe_allow_html=True)
+
         st.markdown("<hr/>", unsafe_allow_html=True)
 
     st.markdown(f"<div>進度：{done}/{len(questions)}　|　答對：{score}</div>", unsafe_allow_html=True)
@@ -178,12 +194,10 @@ if st.session_state.mode in ["全部題目", "隨機10題測驗"]:
 elif st.session_state.mode == "圖片選擇模式（1x2）":
     score = done = 0
 
-    # 🔧 圖片放大尺寸
-    TILE_SIZE = 200   # ← 可改 180~200 視你手機螢幕寬度
+    TILE_SIZE = 200
     GAP = 8
     COMBO_W = TILE_SIZE * 2 + GAP
 
-    # CSS 調整：圖片外框靠齊兩側
     st.markdown("""
     <style>
     .combo-wrapper {
@@ -191,10 +205,6 @@ elif st.session_state.mode == "圖片選擇模式（1x2）":
         justify-content: center;
         align-items: center;
         width: 100%;
-        margin: 0 auto;
-    }
-    .stImage img {
-        display: block;
         margin: 0 auto;
     }
     </style>
@@ -213,19 +223,24 @@ elif st.session_state.mode == "圖片選擇模式（1x2）":
         combo.paste(left_tile, (0, 0))
         combo.paste(right_tile, (TILE_SIZE + GAP, 0))
         draw = ImageDraw.Draw(combo)
-        def draw_border(x, color): draw.rectangle([x+3, 3, x+TILE_SIZE-4, TILE_SIZE-4], outline=color, width=4)
+
+        def draw_border(x, color):
+            draw.rectangle([x+3, 3, x+TILE_SIZE-4, TILE_SIZE-4], outline=color, width=4)
+
         if hl_left == "correct": draw_border(0, (47,158,68))
         elif hl_left == "wrong": draw_border(0, (208,0,0))
+
         if hl_right == "correct": draw_border(TILE_SIZE+GAP, (47,158,68))
         elif hl_right == "wrong": draw_border(TILE_SIZE+GAP, (208,0,0))
+
         return combo
 
     for i, q in enumerate(questions):
         st.markdown(f"**Q{i+1}. {q['name']}**")
 
-        opts = st.session_state.opts_cache[f"opts_{i}"]
+        opts = st.session_state.opts_cache[f"opts_{st.session_state.mode}_{i}"]
         left, right = opts[0], opts[1]
-        ans_key = f"ans_{i}"
+        ans_key = f"{st.session_state.mode}_ans_{i}"
         chosen = st.session_state.get(ans_key)
         correct = q["filename"]
 
@@ -236,21 +251,21 @@ elif st.session_state.mode == "圖片選擇模式（1x2）":
         if chosen:
             if chosen == left:
                 hl_left = "correct" if left == correct else "wrong"
-                if left != correct and right == correct: hl_right = "correct"
+                if left != correct and right == correct:
+                    hl_right = "correct"
             elif chosen == right:
                 hl_right = "correct" if right == correct else "wrong"
-                if right != correct and left == correct: hl_left = "correct"
+                if right != correct and left == correct:
+                    hl_left = "correct"
 
         combo = compose_combo(left_tile, right_tile, hl_left, hl_right)
         combo_path = os.path.join(TMP_DIR, f"combo_{i}.png")
         combo.save(combo_path)
 
-        # ✅ 外層加 div 包裝，讓圖片整體靠齊按鈕區
         st.markdown("<div class='combo-wrapper'>", unsafe_allow_html=True)
         st.image(combo_path, width=COMBO_W)
         st.markdown("</div>", unsafe_allow_html=True)
 
-        # ✅ 改用 columns，讓左右按鈕正好對齊
         col1, col2 = st.columns(2)
         with col1:
             if st.button("選左邊", key=f"left_{i}", use_container_width=True):
@@ -261,7 +276,6 @@ elif st.session_state.mode == "圖片選擇模式（1x2）":
                 st.session_state[ans_key] = right
                 st.rerun()
 
-        # 回饋區
         if chosen:
             if chosen == correct:
                 st.markdown("<div class='opt-result-correct'>✔ 正確！</div>", unsafe_allow_html=True)
@@ -271,17 +285,10 @@ elif st.session_state.mode == "圖片選擇模式（1x2）":
 
         st.markdown("<hr/>", unsafe_allow_html=True)
         done += 1
-        if chosen == correct: score += 1
+        if chosen == correct:
+            score += 1
 
     st.markdown(f"<div>進度：{done}/{len(questions)}　|　答對：{score}</div>", unsafe_allow_html=True)
-
-# ================= 錯題回顧 =================
-if st.session_state.wrong_answers:
-    st.markdown("### ❌ 錯題回顧")
-    for miss in st.session_state.wrong_answers:
-        render_img_card(os.path.join(IMAGE_DIR, miss["img"]), size=140)
-        st.markdown(f"- 題目：{miss['question']}  \n- 正解：**{miss['correct']}**  \n- 你選了：{miss['chosen_name']}")
-        st.markdown("<hr/>", unsafe_allow_html=True)
 
 # ================= 重新開始 =================
 st.markdown("---")
