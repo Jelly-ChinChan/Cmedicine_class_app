@@ -27,7 +27,7 @@ TILE_SIZE = 200
 TMP_DIR = os.path.join(os.getcwd(), "temp_images")
 os.makedirs(TMP_DIR, exist_ok=True)
 
-st.set_page_config(page_title="中藥圖像測驗", page_icon="🌿", layout="centered")
+st.set_page_config(page_title="100題中藥跑台", page_icon="🌿", layout="centered")
 
 st.markdown("""
 <style>
