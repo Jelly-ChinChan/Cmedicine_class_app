@@ -1,5 +1,5 @@
 # Cmedicine_class_app.py
-# 四模式中藥測驗（Cloud-safe）
+# 四模式中藥測驗（Cloud-safe + Google Sheet logging）
 #
 # 模式1：隨機10題多回合（最多10回合、不重複）
 # 模式2：圖片1x2隨機10題（最多2回合、不重複）
@@ -12,6 +12,10 @@ import random
 import os
 import io
 import base64
+import datetime as dt
+
+import gspread
+from google.oauth2.service_account import Credentials
 
 try:
     from PIL import Image, ImageDraw
@@ -110,6 +114,67 @@ def build_name_options(correct_name, all_names, k=4):
     random.shuffle(opts)
     return opts
 
+# ================= Google Sheet 連線 & 紀錄 =================
+@st.cache_resource(show_spinner=False)
+def get_worksheet():
+    """利用 st.secrets['gsheets'] 建立並回傳 worksheet 物件"""
+    try:
+        cfg = st.secrets["gsheets"]
+    except Exception:
+        st.warning("⚠ 尚未設定 gsheets secrets，將不記錄到 Google Sheet。")
+        return None
+
+    try:
+        creds = Credentials.from_service_account_info(
+            {
+                "type": cfg["type"],
+                "project_id": cfg["project_id"],
+                "private_key_id": cfg.get("private_key_id", ""),
+                "private_key": cfg["private_key"],
+                "client_email": cfg["client_email"],
+                "client_id": cfg["client_id"],
+                "token_uri": cfg.get("token_uri", "https://oauth2.googleapis.com/token"),
+            }
+        )
+        gc = gspread.authorize(creds)
+        sh = gc.open_by_key(cfg["sheet_id"])
+        ws = sh.worksheet(cfg["worksheet"])
+        return ws
+    except Exception as e:
+        st.warning(f"⚠ 無法建立 Google Sheet 連線：{e}")
+        return None
+
+def log_answer_to_gsheet(
+    mode: str,
+    round_no: int,
+    question_name: str,
+    correct_answer: str,
+    user_answer: str,
+    image_filename: str,
+):
+    """將單題作答紀錄寫入 Google Sheet，一題一列。失敗時不影響測驗流程。"""
+    ws = get_worksheet()
+    if ws is None:
+        return
+    try:
+        ts = dt.datetime.now().isoformat(timespec="seconds")
+        result = "✔" if user_answer == correct_answer else "✘"
+        ws.append_row(
+            [
+                ts,            # timestamp
+                mode,          # 模式名稱
+                round_no,      # 回合（固定模式可填 0）
+                question_name, # 題目名稱
+                correct_answer,
+                user_answer,
+                result,
+                image_filename,
+            ]
+        )
+    except Exception as e:
+        # 不要讓寫入失敗中斷答題，只提示即可
+        st.toast(f"⚠ 無法寫入 Google Sheet：{e}", icon="⚠")
+
 # ================= 模式1：隨機10題多回合 =================
 def init_mode1_state(total_n):
     st.session_state.m1_round = 1
@@ -165,6 +230,17 @@ def run_mode1(bank):
 
         if chosen is not None:
             num_answered += 1
+
+            # ✅ 寫入 Google Sheet
+            log_answer_to_gsheet(
+                mode="模式1",
+                round_no=current_round,
+                question_name=q["name"],
+                correct_answer=q["name"],
+                user_answer=chosen,
+                image_filename=q["filename"],
+            )
+
             if chosen == q["name"]:
                 score_this += 1
                 st.markdown("<div class='opt-result-correct'>✔ 正確！</div>", unsafe_allow_html=True)
@@ -370,13 +446,24 @@ def run_mode2(bank, filename_to_name):
 
         if chosen is not None:
             chosen_file = left_file if chosen == "left" else right_file
+            chosen_name = filename_to_name.get(chosen_file, "未知")
+
+            # ✅ 寫入 Google Sheet
+            log_answer_to_gsheet(
+                mode="模式2",
+                round_no=current_round,
+                question_name=q["name"],
+                correct_answer=q["name"],
+                user_answer=chosen_name,
+                image_filename=q["filename"],
+            )
+
             if chosen_file == correct_file:
                 score_this += 1
                 st.markdown("<div class='opt-result-correct'>✔ 正確！</div>", unsafe_allow_html=True)
             else:
-                wrong_name = filename_to_name.get(chosen_file, "未知")
                 st.markdown(
-                    f"<div class='opt-result-wrong'>✘ 錯誤，此為：{wrong_name}</div>",
+                    f"<div class='opt-result-wrong'>✘ 錯誤，此為：{chosen_name}</div>",
                     unsafe_allow_html=True
                 )
                 wrong_this_round.append({
@@ -384,7 +471,7 @@ def run_mode2(bank, filename_to_name):
                     "idx": idx,
                     "name": q["name"],
                     "filename": q["filename"],
-                    "chosen_name": wrong_name,
+                    "chosen_name": chosen_name,
                 })
 
         st.markdown("<hr/>", unsafe_allow_html=True)
@@ -457,6 +544,16 @@ def run_fixed_range_mode(bank, start_idx, end_idx, mode_label):
         chosen = raw if raw != "請選擇" else None
 
         if chosen is not None:
+            # ✅ 寫入 Google Sheet（固定範圍模式 round_no = 0）
+            log_answer_to_gsheet(
+                mode=mode_label,
+                round_no=0,
+                question_name=q["name"],
+                correct_answer=q["name"],
+                user_answer=chosen,
+                image_filename=q["filename"],
+            )
+
             if chosen == q["name"]:
                 score += 1
                 st.markdown("<div class='opt-result-correct'>✔ 正確！</div>", unsafe_allow_html=True)
